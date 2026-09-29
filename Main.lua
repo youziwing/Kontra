@@ -1,24 +1,25 @@
 if _G.CharESP and _G.CharESP.cleanup then pcall(_G.CharESP.cleanup) end
 
 local RunService = game:GetService("RunService")
-local MAX = 10
+local Players = game:GetService("Players")
+local lp = Players.LocalPlayer
+local MAX = 16
 local TPG = 10
 local FPS = 60
 local SCALE = 2
 local UI_URL = "https://raw.githubusercontent.com/neaxusxgod-png/INS-ui/main/uilib.min.lua"
 
-local S = { boxes = {}, labels = {}, tris = {}, cache = {} }
+local S = { boxes = {}, tris = {}, cache = {} }
 _G.CharESP = S
 
 local cfg = {
-    on = true, box = true, chams = false, label = true,
+    on = true, box = true, chams = false, teamCheck = true,
     head = true, torso = true, arms = false, legs = true,
     opacity = 0.35,
     boxCol = Color3.fromRGB(255, 50, 50),
     chamCol = Color3.fromRGB(255, 50, 50),
     aimOn = false, aimHeld = false, aimPart = "head",
-    fov = 150, smooth = 6, maxSpeed = 40, deadzone = 2,
-    sticky = true, aimCursor = false,
+    fov = 150, smooth = 6, maxSpeed = 40, sticky = true,
     showFov = true, fovCol = Color3.fromRGB(255, 255, 255),
 }
 
@@ -29,7 +30,8 @@ S.fov.Transparency, S.fov.Color, S.fov.Visible = 1, cfg.fovCol, false
 local ids = {}
 for i = 1, MAX do ids[i] = tostring(i) end
 
-local vis, boxOn, labOn, triN = {}, {}, {}, {}
+local vis, boxOn, triN = {}, {}, {}
+local myTeam
 
 local function getBox(i)
     local b = S.boxes[i]
@@ -40,17 +42,6 @@ local function getBox(i)
         S.boxes[i] = b
     end
     return b
-end
-
-local function getLabel(i)
-    local l = S.labels[i]
-    if not l then
-        l = Drawing.new("Text")
-        l.Text, l.Size, l.Center, l.Outline = ids[i], 14, true, true
-        l.Color, l.Visible = Color3.fromRGB(255, 255, 255), false
-        S.labels[i] = l
-    end
-    return l
 end
 
 local function getTri(i, k)
@@ -80,7 +71,6 @@ local function hideSlot(i)
     if not vis[i] then return end
     vis[i] = false
     if boxOn[i] then S.boxes[i].Visible = false boxOn[i] = false end
-    if labOn[i] then S.labels[i].Visible = false labOn[i] = false end
     local pool = S.tris[i]
     for k = 1, triN[i] or 0 do pool[k].Visible = false end
     triN[i] = 0
@@ -109,7 +99,7 @@ local function buildMenu()
 
     local tab = win:Tab("ESP", "eye")
 
-    local main = tab:Section("ESP", "Left", "characters 1-10")
+    local main = tab:Section("ESP", "Left", "characters 1-16")
     local en = main:Toggle("Enabled", cfg.on, function(v)
         cfg.on = v
         Lib:Notify("Character ESP", v and "enabled" or "disabled", 2, v and "success" or "warning")
@@ -132,7 +122,7 @@ local function buildMenu()
         cfg.opacity = v
         restyle()
     end)
-    main:Toggle("Slot Number", cfg.label, function(v) cfg.label = v end)
+    main:Toggle("Team check", cfg.teamCheck, function(v) cfg.teamCheck = v end)
 
     local parts = tab:Section("Chams Body Parts", "Right", "box always covers the whole body")
     parts:Toggle("Head", cfg.head, function(v) cfg.head = v end)
@@ -158,7 +148,6 @@ local function buildMenu()
     end)
     aim:Slider("Smoothing", cfg.smooth, 0.5, 1, 30, "", function(v) cfg.smooth = v end)
     aim:Slider("Max speed", cfg.maxSpeed, 1, 2, 150, "px", function(v) cfg.maxSpeed = v end)
-    aim:Slider("Deadzone", cfg.deadzone, 0.5, 0, 20, "px", function(v) cfg.deadzone = v end)
     aim:Toggle("Sticky target", cfg.sticky, function(v) cfg.sticky = v S.lock = nil end)
 
     local fovSec = aimTab:Section("FOV", "Right")
@@ -168,7 +157,6 @@ local function buildMenu()
         cfg.fovCol = c
         S.fov.Color = c
     end)
-    fovSec:Toggle("Aim from cursor", cfg.aimCursor, function(v) cfg.aimCursor = v end)
 
     local menu = win:SettingsSection("Menu", "Right")
 
@@ -329,21 +317,45 @@ local DEFS = {
     },
 }
 
-local function isMe(char)
-    local ok, res = pcall(function()
-        local lp = game:GetService("Players").LocalPlayer
+local function findPlayer(char)
+    local ok, plr = pcall(function()
         local tag = char:FindFirstChild("NameTag")
         local cg = tag and tag:FindFirstChild("CanvasGroup")
         local lbl = cg and cg:FindFirstChild("PlayerName")
         local text = lbl and lbl.Text
-        return text ~= nil and text ~= "" and (text == lp.Name or text == lp.DisplayName)
+        if not text or text == "" then return nil end
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p.Name == text or p.DisplayName == text then return p end
+        end
+        return nil
     end)
-    return ok and res == true
+    return ok and plr or nil
+end
+
+local function refresh(c)
+    if not c.plr then c.plr = findPlayer(c.char) end
+    if c.plr then
+        local ok, t = pcall(function() return c.plr:GetAttribute("Team") end)
+        if ok then
+            c.team = t
+        else
+            c.plr, c.team = nil, nil
+        end
+    end
+end
+
+local function skip(c)
+    if c.plr and c.plr == lp then return true end
+    if cfg.teamCheck then
+        local t = c.team
+        return not (t == "T" or t == "CT") or t == myTeam
+    end
+    return false
 end
 
 local function buildCache(char)
     local def = char:FindFirstChild("UpperTorso") and DEFS.R15 or DEFS.R6
-    local c = { char = char, groups = {}, all = {}, complete = true, wait = 0, age = 0, me = isMe(char) }
+    local c = { char = char, groups = {}, all = {}, complete = true, wait = 0, age = 0 }
     for _, key in ipairs(KEYS) do
         local gl = {}
         for _, names in ipairs(def[key]) do
@@ -361,6 +373,7 @@ local function buildCache(char)
         end
         c.groups[key] = gl
     end
+    refresh(c)
     return c
 end
 
@@ -390,7 +403,7 @@ local function getCache(i, folder)
             if c.wait >= 30 then c = buildCache(char) S.cache[i] = c end
         end
         c.age = c.age + 1
-        if not c.me and c.age % 120 == 0 then c.me = isMe(char) end
+        if c.age % 30 == 0 or (not c.plr and c.age % 10 == 0) then refresh(c) end
     end
     if #c.all == 0 then return nil end
     return c
@@ -398,7 +411,7 @@ end
 
 local function procChar(i, folder)
     local c = getCache(i, folder)
-    if not c or c.me then return hideSlot(i) end
+    if not c or skip(c) then return hideSlot(i) end
 
     local drew = false
     local prev = triN[i] or 0
@@ -455,28 +468,17 @@ local function procChar(i, folder)
                 if not boxOn[i] then box.Visible = true boxOn[i] = true end
                 boxDrawn = true
                 drew = true
-
-                if cfg.label then
-                    local l = getLabel(i)
-                    l.Position = Vector2.new((minX + maxX) * 0.5, minY - 16)
-                    if not labOn[i] then l.Visible = true labOn[i] = true end
-                elseif labOn[i] then
-                    S.labels[i].Visible = false
-                    labOn[i] = false
-                end
             end
         end
     end
-    if not boxDrawn then
-        if boxOn[i] then S.boxes[i].Visible = false boxOn[i] = false end
-        if labOn[i] then S.labels[i].Visible = false labOn[i] = false end
+    if not boxDrawn and boxOn[i] then
+        S.boxes[i].Visible = false
+        boxOn[i] = false
     end
 
     vis[i] = drew
 end
 
-local UIS
-pcall(function() UIS = game:GetService("UserInputService") end)
 local remX, remY = 0, 0
 
 local function trunc(v) return v >= 0 and math.floor(v) or math.ceil(v) end
@@ -493,17 +495,9 @@ local function groupCenter(c, key)
     return sx / n, sy / n, sz / n
 end
 
-local function aimCenter()
-    if cfg.aimCursor and UIS then
-        local ok, p = pcall(function() return UIS:GetMouseLocation() end)
-        if ok and p then return p.X, p.Y end
-    end
-    return hW, hH
-end
-
-local function evalSlot(i, folder, ax, ay, mode)
+local function evalSlot(i, folder, mode)
     local c = getCache(i, folder)
-    if not c or c.me then return nil end
+    if not c or skip(c) then return nil end
 
     local bestD, bx, by
     for _, key in ipairs(SETS[mode] or SETS.head) do
@@ -511,7 +505,7 @@ local function evalSlot(i, folder, ax, ay, mode)
         if x then
             local sx, sy = projectPoint(x, y, z)
             if sx then
-                local dx, dy = sx - ax, sy - ay
+                local dx, dy = sx - hW, sy - hH
                 local d = math.sqrt(dx * dx + dy * dy)
                 if not bestD or d < bestD then bestD, bx, by = d, sx, sy end
             end
@@ -528,12 +522,11 @@ local function aimStep(folder)
     if not mousemoverel then return end
     if isrbxactive and not isrbxactive() then return end
 
-    local ax, ay = aimCenter()
     local mode, fov = cfg.aimPart, cfg.fov
     local td, tx, ty
 
     if cfg.sticky and S.lock then
-        local ok, d, sx, sy = pcall(evalSlot, S.lock, folder, ax, ay, mode)
+        local ok, d, sx, sy = pcall(evalSlot, S.lock, folder, mode)
         if ok and d and d <= fov * 1.5 then
             td, tx, ty = d, sx, sy
         else
@@ -544,7 +537,7 @@ local function aimStep(folder)
     if not td then
         local best
         for i = 1, MAX do
-            local ok, d, sx, sy = pcall(evalSlot, i, folder, ax, ay, mode)
+            local ok, d, sx, sy = pcall(evalSlot, i, folder, mode)
             if ok and d and d <= fov and (not td or d < td) then
                 td, tx, ty, best = d, sx, sy, i
             end
@@ -552,9 +545,9 @@ local function aimStep(folder)
         S.lock = best
     end
 
-    if not td or td < cfg.deadzone then return end
+    if not td then return end
 
-    local mx, my = (tx - ax) / cfg.smooth, (ty - ay) / cfg.smooth
+    local mx, my = (tx - hW) / cfg.smooth, (ty - hH) / cfg.smooth
     local mag = math.sqrt(mx * mx + my * my)
     if mag > cfg.maxSpeed then
         local k = cfg.maxSpeed / mag
@@ -579,8 +572,7 @@ end
 local function updFov()
     if cfg.aimOn and cfg.showFov then
         local f = S.fov
-        local ax, ay = aimCenter()
-        if ax ~= fovX or ay ~= fovY then f.Position = Vector2.new(ax, ay) fovX, fovY = ax, ay end
+        if hW ~= fovX or hH ~= fovY then f.Position = Vector2.new(hW, hH) fovX, fovY = hW, hH end
         if cfg.fov ~= fovR then f.Radius = cfg.fov fovR = cfg.fov end
         if not fovOn then f.Visible = true fovOn = true end
     else
@@ -603,6 +595,11 @@ S.conn = RunService.RenderStepped:Connect(function(dt)
         hideFov()
         S.lock = nil
         return
+    end
+
+    if frame % 30 == 1 then
+        local ok, t = pcall(function() return lp:GetAttribute("Team") end)
+        myTeam = ok and t or nil
     end
 
     updCam()
@@ -632,7 +629,6 @@ print("[CharESP] running")
 S.cleanup = function()
     if S.conn then pcall(function() S.conn:Disconnect() end) end
     for _, b in pairs(S.boxes) do pcall(function() b:Remove() end) end
-    for _, l in pairs(S.labels) do pcall(function() l:Remove() end) end
     for _, pool in pairs(S.tris) do
         for _, t in pairs(pool) do pcall(function() t:Remove() end) end
     end

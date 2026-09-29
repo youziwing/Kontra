@@ -3,7 +3,7 @@ if _G.CharESP and _G.CharESP.cleanup then pcall(_G.CharESP.cleanup) end
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
 local lp = Players.LocalPlayer
-local MAX = 16
+local MAXSLOTS = 32
 local TPG = 10
 local FPS = 60
 local SCALE = 2
@@ -27,8 +27,9 @@ S.fov = Drawing.new("Circle")
 S.fov.Filled, S.fov.NumSides, S.fov.Thickness = false, 64, 1
 S.fov.Transparency, S.fov.Color, S.fov.Visible = 1, cfg.fovCol, false
 
-local ids = {}
-for i = 1, MAX do ids[i] = tostring(i) end
+local nextSlot, freeSlots = 1, {}
+local slotOf, allSlots = {}, {}
+local used = {}
 
 local vis, boxOn, triN = {}, {}, {}
 local myTeam
@@ -72,12 +73,14 @@ local function hideSlot(i)
     vis[i] = false
     if boxOn[i] then S.boxes[i].Visible = false boxOn[i] = false end
     local pool = S.tris[i]
-    for k = 1, triN[i] or 0 do pool[k].Visible = false end
+    if pool then
+        for k = 1, triN[i] or 0 do pool[k].Visible = false end
+    end
     triN[i] = 0
 end
 
 local function hideAll()
-    for i = 1, MAX do hideSlot(i) end
+    for i in pairs(allSlots) do hideSlot(i) end
 end
 
 local function pick(v) return type(v) == "table" and v[1] or v end
@@ -99,7 +102,7 @@ local function buildMenu()
 
     local tab = win:Tab("ESP", "eye")
 
-    local main = tab:Section("ESP", "Left", "characters 1-16")
+    local main = tab:Section("ESP", "Left", "every character, auto-detected")
     local en = main:Toggle("Enabled", cfg.on, function(v)
         cfg.on = v
         Lib:Notify("Character ESP", v and "enabled" or "disabled", 2, v and "success" or "warning")
@@ -324,8 +327,14 @@ local function findPlayer(char)
         local lbl = cg and cg:FindFirstChild("PlayerName")
         local text = lbl and lbl.Text
         if not text or text == "" then return nil end
+        text = string.gsub(text, "^%s*(.-)%s*$", "%1")
+        if text == "" then return nil end
+        local lower = string.lower(text)
         for _, p in ipairs(Players:GetPlayers()) do
-            if p.Name == text or p.DisplayName == text then return p end
+            if p.Name == text or p.DisplayName == text
+                or string.lower(p.Name) == lower or string.lower(p.DisplayName) == lower then
+                return p
+            end
         end
         return nil
     end)
@@ -342,12 +351,17 @@ local function refresh(c)
             c.plr, c.team = nil, nil
         end
     end
+    if not c.team then
+        local ok, t = pcall(function() return c.char:GetAttribute("Team") end)
+        if ok and t ~= nil then c.team = t end
+    end
 end
 
 local function skip(c)
     if c.plr and c.plr == lp then return true end
     if cfg.teamCheck then
         local t = c.team
+        if t == nil then return false end 
         return not (t == "T" or t == "CT") or t == myTeam
     end
     return false
@@ -379,7 +393,7 @@ end
 
 local stamp, frame = {}, 0
 
-local function getCache(i, folder)
+local function getCache(i, char)
     if stamp[i] == frame then
         local c = S.cache[i]
         if c and #c.all > 0 then return c end
@@ -387,7 +401,6 @@ local function getCache(i, folder)
     end
     stamp[i] = frame
 
-    local char = folder:FindFirstChild(ids[i])
     if not char then
         S.cache[i] = nil
         return nil
@@ -409,8 +422,8 @@ local function getCache(i, folder)
     return c
 end
 
-local function procChar(i, folder)
-    local c = getCache(i, folder)
+local function procChar(i, char)
+    local c = getCache(i, char)
     if not c or skip(c) then return hideSlot(i) end
 
     local drew = false
@@ -446,7 +459,9 @@ local function procChar(i, folder)
         end
     end
     local pool = S.tris[i]
-    for j = ti + 1, prev do pool[j].Visible = false end
+    if pool then
+        for j = ti + 1, prev do pool[j].Visible = false end
+    end
     triN[i] = ti
     if ti > 0 then drew = true end
 
@@ -495,8 +510,10 @@ local function groupCenter(c, key)
     return sx / n, sy / n, sz / n
 end
 
-local function evalSlot(i, folder, mode)
-    local c = getCache(i, folder)
+local function evalChar(char, mode)
+    local i = slotOf[char]
+    if not i then return nil end
+    local c = getCache(i, char)
     if not c or skip(c) then return nil end
 
     local bestD, bx, by
@@ -514,7 +531,7 @@ local function evalSlot(i, folder, mode)
     return bestD, bx, by
 end
 
-local function aimStep(folder)
+local function aimStep()
     if not (cfg.aimOn and cfg.aimHeld) then
         S.lock, remX, remY = nil, 0, 0
         return
@@ -526,7 +543,7 @@ local function aimStep(folder)
     local td, tx, ty
 
     if cfg.sticky and S.lock then
-        local ok, d, sx, sy = pcall(evalSlot, S.lock, folder, mode)
+        local ok, d, sx, sy = pcall(evalChar, S.lock, mode)
         if ok and d and d <= fov * 1.5 then
             td, tx, ty = d, sx, sy
         else
@@ -536,10 +553,10 @@ local function aimStep(folder)
 
     if not td then
         local best
-        for i = 1, MAX do
-            local ok, d, sx, sy = pcall(evalSlot, i, folder, mode)
+        for char in pairs(used) do
+            local ok, d, sx, sy = pcall(evalChar, char, mode)
             if ok and d and d <= fov and (not td or d < td) then
-                td, tx, ty, best = d, sx, sy, i
+                td, tx, ty, best = d, sx, sy, char
             end
         end
         S.lock = best
@@ -591,22 +608,64 @@ S.conn = RunService.RenderStepped:Connect(function(dt)
 
     local folder = workspace:FindFirstChild("Characters")
     if not folder then
+        -- release every slot
+        for char, i in pairs(slotOf) do
+            freeSlots[#freeSlots + 1] = i
+            slotOf[char] = nil
+            S.cache[i] = nil
+            stamp[i] = nil
+        end
+        used = {}
         hideAll()
         hideFov()
         S.lock = nil
         return
     end
 
-    if frame % 30 == 1 then
+    do
         local ok, t = pcall(function() return lp:GetAttribute("Team") end)
         myTeam = ok and t or nil
     end
 
+    local newUsed = {}
+    for _, char in ipairs(folder:GetChildren()) do
+        if char:IsA("Model") then
+            local i = slotOf[char]
+            if not i then
+                if #freeSlots > 0 then
+                    i = table.remove(freeSlots, #freeSlots)
+                elseif nextSlot <= MAXSLOTS then
+                    i = nextSlot
+                    nextSlot = nextSlot + 1
+                end
+                if i then
+                    slotOf[char] = i
+                    allSlots[i] = true
+                end
+            end
+            if i then
+                newUsed[i] = char
+            end
+        end
+    end
+
+    for char, i in pairs(slotOf) do
+        if newUsed[i] ~= char then
+            hideSlot(i)
+            slotOf[char] = nil
+            freeSlots[#freeSlots + 1] = i
+            S.cache[i] = nil
+            stamp[i] = nil
+            if S.lock == char then S.lock = nil end
+        end
+    end
+    used = newUsed
+
     updCam()
 
     if cfg.on and (cfg.box or cfg.chams) then
-        for i = 1, MAX do
-            local ok, e = pcall(procChar, i, folder)
+        for i, char in pairs(used) do
+            local ok, e = pcall(procChar, i, char)
             if not ok then
                 S.cache[i] = nil
                 hideSlot(i)
@@ -620,11 +679,11 @@ S.conn = RunService.RenderStepped:Connect(function(dt)
         hideAll()
     end
 
-    pcall(aimStep, folder)
+    pcall(aimStep)
     pcall(updFov)
 end)
 
-print("[CharESP] running")
+print("[CharESP] running (dynamic slots)")
 
 S.cleanup = function()
     if S.conn then pcall(function() S.conn:Disconnect() end) end

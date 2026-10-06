@@ -8,12 +8,13 @@ local FPS = 60
 local SCALE = 2
 local UI_URL = "https://raw.githubusercontent.com/neaxusxgod-png/INS-ui/main/uilib.min.lua"
 
-local S = { boxes = {}, tris = {}, cache = {}, wpn = {} }
+local S = { boxes = {}, tris = {}, cache = {}, wpn = {}, lines = {} }
 _G.CharESP = S
 
 local cfg = {
     on = true, box = true, chams = false, teamCheck = true,
     weapon = true, wpnCol = Color3.fromRGB(255, 190, 60),
+    tracer = true, tracerCol = Color3.fromRGB(255, 255, 255), tracerFrom = "bottom",
     head = true, torso = true, arms = false, legs = true,
     opacity = 0.35,
     boxCol = Color3.fromRGB(255, 50, 50),
@@ -30,7 +31,7 @@ S.fov.Transparency, S.fov.Color, S.fov.Visible = 1, cfg.fovCol, false
 local ids = {}
 for i = 1, MAX do ids[i] = tostring(i) end
 
-local vis, boxOn, wOn, wTxt, triN = {}, {}, {}, {}, {}
+local vis, boxOn, wOn, lnOn, wTxt, triN = {}, {}, {}, {}, {}, {}
 
 local function modelFingerprint(m)
     if not m then return nil end
@@ -104,6 +105,17 @@ local function getWpn(i)
     return d
 end
 
+local function getLine(i)
+    local l = S.lines[i]
+    if not l then
+        l = Drawing.new("Line")
+        l.Thickness, l.Transparency, l.Visible = 1, 1, false
+        l.Color = cfg.tracerCol
+        S.lines[i] = l
+    end
+    return l
+end
+
 local function restyle()
     for _, pool in pairs(S.tris) do
         for _, t in pairs(pool) do
@@ -113,6 +125,7 @@ local function restyle()
     end
     for _, b in pairs(S.boxes) do b.Color = cfg.boxCol end
     for _, d in pairs(S.wpn) do d.Color = cfg.wpnCol end
+    for _, l in pairs(S.lines) do l.Color = cfg.tracerCol end
 end
 
 local function hideSlot(i)
@@ -120,6 +133,7 @@ local function hideSlot(i)
     vis[i] = false
     if boxOn[i] then S.boxes[i].Visible = false boxOn[i] = false end
     if wOn[i] then S.wpn[i].Visible = false wOn[i] = false end
+    if lnOn[i] then S.lines[i].Visible = false lnOn[i] = false end
     local pool = S.tris[i]
     for k = 1, triN[i] or 0 do pool[k].Visible = false end
     triN[i] = 0
@@ -171,6 +185,15 @@ local function buildMenu()
     wpnT:AddColorpicker("Label color", cfg.wpnCol, function(c)
         cfg.wpnCol = c
         restyle()
+    end)
+
+    local trT = main:Toggle("Tracers", cfg.tracer, function(v) cfg.tracer = v end)
+    trT:AddColorpicker("Tracer color", cfg.tracerCol, function(c)
+        cfg.tracerCol = c
+        restyle()
+    end)
+    main:Dropdown("Tracer origin", {"Bottom"}, {"Bottom", "Center", "Top"}, false, function(v)
+        cfg.tracerFrom = string.lower(tostring(pick(v)))
     end)
 
     main:Slider("Chams Opacity", cfg.opacity, 0.05, 0.05, 1.0, "", function(v)
@@ -452,6 +475,18 @@ local function getCache(i, folder)
     return c
 end
 
+local function groupCenter(c, key)
+    local sx, sy, sz, n = 0, 0, 0, 0
+    for _, list in ipairs(c.groups[key]) do
+        for _, p in ipairs(list) do
+            local pos = p.Position
+            sx, sy, sz, n = sx + pos.X, sy + pos.Y, sz + pos.Z, n + 1
+        end
+    end
+    if n == 0 then return nil end
+    return sx / n, sy / n, sz / n
+end
+
 local function procChar(i, folder)
     local c = getCache(i, folder)
     if not c or skip(c) then return hideSlot(i) end
@@ -551,24 +586,36 @@ local function procChar(i, folder)
         wOn[i] = false
     end
 
+    local tShown = false
+    if cfg.tracer then
+        local x, y, z = groupCenter(c, "torso")
+        if not x then x, y, z = groupCenter(c, "head") end
+        if x then
+            local sx, sy = projectPoint(x, y, z)
+            if sx then
+                local ox, oy = hW, hH * 2
+                if cfg.tracerFrom == "center" then oy = hH
+                elseif cfg.tracerFrom == "top" then oy = 0 end
+                local ln = getLine(i)
+                ln.From = Vector2.new(ox, oy)
+                ln.To = Vector2.new(sx, sy)
+                if not lnOn[i] then ln.Visible = true lnOn[i] = true end
+                tShown = true
+                drew = true
+            end
+        end
+    end
+    if not tShown and lnOn[i] then
+        S.lines[i].Visible = false
+        lnOn[i] = false
+    end
+
     vis[i] = drew
 end
 
 local remX, remY = 0, 0
 
 local function trunc(v) return v >= 0 and math.floor(v) or math.ceil(v) end
-
-local function groupCenter(c, key)
-    local sx, sy, sz, n = 0, 0, 0, 0
-    for _, list in ipairs(c.groups[key]) do
-        for _, p in ipairs(list) do
-            local pos = p.Position
-            sx, sy, sz, n = sx + pos.X, sy + pos.Y, sz + pos.Z, n + 1
-        end
-    end
-    if n == 0 then return nil end
-    return sx / n, sy / n, sz / n
-end
 
 local function evalSlot(i, folder, mode)
     local c = getCache(i, folder)
@@ -673,13 +720,13 @@ S.conn = RunService.RenderStepped:Connect(function(dt)
     if cfg.weapon and wCount == 0 then
         if frame % 180 == 0 then pcall(buildWeaponMap) end
         if frame == 600 and wCount == 0 then
-            print("[CharESP] weapon list error")
+            print("weapon list is error")
         end
     end
 
     updCam()
 
-    if cfg.on and (cfg.box or cfg.chams or cfg.weapon) then
+    if cfg.on and (cfg.box or cfg.chams or cfg.weapon or cfg.tracer) then
         for i = 1, MAX do
             local ok, e = pcall(procChar, i, folder)
             if not ok then
@@ -705,6 +752,7 @@ S.cleanup = function()
     if S.conn then pcall(function() S.conn:Disconnect() end) end
     for _, b in pairs(S.boxes) do pcall(function() b:Remove() end) end
     for _, d in pairs(S.wpn) do pcall(function() d:Remove() end) end
+    for _, l in pairs(S.lines) do pcall(function() l:Remove() end) end
     for _, pool in pairs(S.tris) do
         for _, t in pairs(pool) do pcall(function() t:Remove() end) end
     end

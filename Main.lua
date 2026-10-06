@@ -18,7 +18,7 @@ local cfg = {
     opacity = 0.35,
     boxCol = Color3.fromRGB(255, 50, 50),
     chamCol = Color3.fromRGB(255, 50, 50),
-    aimOn = false, aimHeld = false, aimPart = "head",
+    aimHeld = false, aimPart = "head",
     fov = 150, smooth = 6, maxSpeed = 40, sticky = true,
     showFov = true, fovCol = Color3.fromRGB(255, 255, 255),
 }
@@ -187,16 +187,8 @@ local function buildMenu()
 
     local aimTab = win:Tab("Aim", "crosshair")
 
-    local aim = aimTab:Section("Aim Assist", "Left", "toggle it on, then hold the aim key")
-    local aimT = aim:Toggle("Aim Assist", cfg.aimOn, function(v)
-        cfg.aimOn = v
-        if v and not mousemoverel then
-            Lib:Notify("Aim Assist", "mousemoverel is not available here", 4, "error")
-        end
-    end)
-    aimT:AddKeybind("x", "Toggle")
-
-    local holdT = aim:Toggle("Aim key", cfg.aimHeld, function(v) cfg.aimHeld = v end)
+    local aim = aimTab:Section("Aim", "Left", "hold the key to aim")
+    local holdT = aim:Toggle("Aim", cfg.aimHeld, function(v) cfg.aimHeld = v end)
     holdT:AddKeybind("e", "Hold")
 
     aim:Dropdown("Target part", {"Head"}, {"Head", "Torso", "Arms", "Legs", "Closest"}, false, function(v)
@@ -270,7 +262,7 @@ end
 
 local ok, err = pcall(buildMenu)
 if not ok then print("[CharESP] menu failed (ESP still runs): " .. tostring(err)) end
-if not mousemoverel then print("[CharESP] mousemoverel not found, aim assist cannot move the mouse") end
+if not mousemoverel then print("[CharESP] mousemoverel not found, aim cannot move the mouse") end
 
 local cX, cY, cZ, c00, c01, c02, c10, c11, c12, c20, c21, c22, fL, hW, hH
 
@@ -598,7 +590,7 @@ local function evalSlot(i, folder, mode)
 end
 
 local function aimStep(folder)
-    if not (cfg.aimOn and cfg.aimHeld) or not mousemoverel then
+    if not cfg.aimHeld or not mousemoverel then
         S.lock, remX, remY = nil, 0, 0
         return
     end
@@ -651,7 +643,7 @@ local function hideFov()
 end
 
 local function updFov()
-    if cfg.aimOn and cfg.showFov then
+    if cfg.showFov then
         local f = S.fov
         if hW ~= fovX or hH ~= fovY then f.Position = Vector2.new(hW, hH) fovX, fovY = hW, hH end
         if cfg.fov ~= fovR then f.Radius = cfg.fov fovR = cfg.fov end

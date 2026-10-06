@@ -1,17 +1,19 @@
 if _G.CharESP and _G.CharESP.cleanup then pcall(_G.CharESP.cleanup) end
 
 local RunService = game:GetService("RunService")
+local RS = game:GetService("ReplicatedStorage")
 local MAX = 16
 local TPG = 10
 local FPS = 60
 local SCALE = 2
 local UI_URL = "https://raw.githubusercontent.com/neaxusxgod-png/INS-ui/main/uilib.min.lua"
 
-local S = { boxes = {}, tris = {}, cache = {} }
+local S = { boxes = {}, tris = {}, cache = {}, wpn = {} }
 _G.CharESP = S
 
 local cfg = {
     on = true, box = true, chams = false, teamCheck = true,
+    weapon = true, wpnCol = Color3.fromRGB(255, 190, 60),
     head = true, torso = true, arms = false, legs = true,
     opacity = 0.35,
     boxCol = Color3.fromRGB(255, 50, 50),
@@ -28,7 +30,44 @@ S.fov.Transparency, S.fov.Color, S.fov.Visible = 1, cfg.fovCol, false
 local ids = {}
 for i = 1, MAX do ids[i] = tostring(i) end
 
-local vis, boxOn, triN = {}, {}, {}
+local vis, boxOn, wOn, wTxt, triN = {}, {}, {}, {}, {}
+
+local function modelFingerprint(m)
+    if not m then return nil end
+    local t = {}
+    for _, d in ipairs(m:GetDescendants()) do
+        if d.ClassName == "MeshPart" or d.ClassName == "Part" then
+            local s = d.Size
+            t[#t + 1] = string.format("%s:%.3f,%.3f,%.3f", d.Name, s.X, s.Y, s.Z)
+        end
+    end
+    if #t == 0 then return nil end
+    table.sort(t)
+    return table.concat(t, ";")
+end
+
+local fpToWeapon, wCount = {}, 0
+
+local function buildWeaponMap()
+    local shared = RS:FindFirstChild("Shared")
+    local mgr = shared and shared:FindFirstChild("Managers")
+    local WM = mgr and mgr:FindFirstChild("WeaponManager")
+    if not WM then return end
+    local map, n = {}, 0
+    for _, cat in ipairs(WM:GetChildren()) do
+        if cat.ClassName == "Folder" then
+            for _, wdef in ipairs(cat:GetChildren()) do
+                local k = modelFingerprint(wdef:FindFirstChild("CharacterModel"))
+                if k then
+                    map[k] = wdef.Name
+                    n = n + 1
+                end
+            end
+        end
+    end
+    fpToWeapon, wCount = map, n
+end
+pcall(buildWeaponMap)
 
 local function getBox(i)
     local b = S.boxes[i]
@@ -54,6 +93,17 @@ local function getTri(i, k)
     return t
 end
 
+local function getWpn(i)
+    local d = S.wpn[i]
+    if not d then
+        d = Drawing.new("Text")
+        d.Size, d.Center, d.Outline, d.Font = 14, true, true, 2
+        d.Color, d.Visible = cfg.wpnCol, false
+        S.wpn[i] = d
+    end
+    return d
+end
+
 local function restyle()
     for _, pool in pairs(S.tris) do
         for _, t in pairs(pool) do
@@ -62,12 +112,14 @@ local function restyle()
         end
     end
     for _, b in pairs(S.boxes) do b.Color = cfg.boxCol end
+    for _, d in pairs(S.wpn) do d.Color = cfg.wpnCol end
 end
 
 local function hideSlot(i)
     if not vis[i] then return end
     vis[i] = false
     if boxOn[i] then S.boxes[i].Visible = false boxOn[i] = false end
+    if wOn[i] then S.wpn[i].Visible = false wOn[i] = false end
     local pool = S.tris[i]
     for k = 1, triN[i] or 0 do pool[k].Visible = false end
     triN[i] = 0
@@ -112,6 +164,12 @@ local function buildMenu()
     local chamT = main:Toggle("Chams", cfg.chams, function(v) cfg.chams = v end)
     chamT:AddColorpicker("Chams color", cfg.chamCol, function(c)
         cfg.chamCol = c
+        restyle()
+    end)
+
+    local wpnT = main:Toggle("Weapon labels", cfg.weapon, function(v) cfg.weapon = v end)
+    wpnT:AddColorpicker("Label color", cfg.wpnCol, function(c)
+        cfg.wpnCol = c
         restyle()
     end)
 
@@ -349,6 +407,27 @@ local function buildCache(char)
     return c
 end
 
+local function refreshWeapon(c)
+    pcall(function()
+        local char = c.char
+        local wm
+        for _, ch in ipairs(char:GetChildren()) do
+            if ch.ClassName == "Model" then
+                wm = ch
+                break
+            end
+        end
+        local fp = modelFingerprint(wm)
+        c.weapon = fp and fpToWeapon[fp] or nil
+
+        local nt = char:FindFirstChild("NameTag")
+        local cg = nt and nt:FindFirstChild("CanvasGroup")
+        local pn = cg and cg:FindFirstChild("PlayerName")
+        local text = pn and pn.Text
+        c.name = (type(text) == "string" and text ~= "") and text or nil
+    end)
+end
+
 local stamp, frame = {}, 0
 
 local function getCache(i, folder)
@@ -446,6 +525,38 @@ local function procChar(i, folder)
     if not boxDrawn and boxOn[i] then
         S.boxes[i].Visible = false
         boxOn[i] = false
+    end
+
+    local wShown = false
+    if cfg.weapon then
+        if c.wAt == nil or (frame + i) % 25 == 0 then
+            refreshWeapon(c)
+            c.wAt = frame
+        end
+        if c.weapon then
+            local hl = c.groups.head[1]
+            local hp = hl and hl[1]
+            if hp then
+                local pos = hp.Position
+                local sx, sy = projectPoint(pos.X, pos.Y + 2.5, pos.Z)
+                if sx then
+                    local d = getWpn(i)
+                    local txt = c.name and (c.name .. "  [" .. c.weapon .. "]") or ("[" .. c.weapon .. "]")
+                    if wTxt[i] ~= txt then
+                        d.Text = txt
+                        wTxt[i] = txt
+                    end
+                    d.Position = Vector2.new(sx, sy)
+                    if not wOn[i] then d.Visible = true wOn[i] = true end
+                    wShown = true
+                    drew = true
+                end
+            end
+        end
+    end
+    if not wShown and wOn[i] then
+        S.wpn[i].Visible = false
+        wOn[i] = false
     end
 
     vis[i] = drew
@@ -567,9 +678,16 @@ S.conn = RunService.RenderStepped:Connect(function(dt)
         return
     end
 
+    if cfg.weapon and wCount == 0 then
+        if frame % 180 == 0 then pcall(buildWeaponMap) end
+        if frame == 600 and wCount == 0 then
+            print("[CharESP] weapon list error")
+        end
+    end
+
     updCam()
 
-    if cfg.on and (cfg.box or cfg.chams) then
+    if cfg.on and (cfg.box or cfg.chams or cfg.weapon) then
         for i = 1, MAX do
             local ok, e = pcall(procChar, i, folder)
             if not ok then
@@ -594,6 +712,7 @@ print("[CharESP] running")
 S.cleanup = function()
     if S.conn then pcall(function() S.conn:Disconnect() end) end
     for _, b in pairs(S.boxes) do pcall(function() b:Remove() end) end
+    for _, d in pairs(S.wpn) do pcall(function() d:Remove() end) end
     for _, pool in pairs(S.tris) do
         for _, t in pairs(pool) do pcall(function() t:Remove() end) end
     end

@@ -6,15 +6,26 @@ local MAX = 16
 local TPG = 10
 local FPS = 60
 local SCALE = 2
+local JUMP = 80
+local VOID_Y = -100
+local UP, DOWN = 2.6, 2.7
+local DEBUG = false
 local UI_URL = "https://raw.githubusercontent.com/neaxusxgod-png/INS-ui/main/uilib.min.lua"
 
-local S = { boxes = {}, tris = {}, cache = {}, wpn = {}, lines = {} }
+local S = { boxes = {}, tris = {}, cache = {}, lbl = {}, lines = {}, seen = {}, gTxt = {}, gBox = {}, gDot = {} }
 _G.CharESP = S
+
+local rev = 0
 
 local cfg = {
     on = true, box = true, chams = false, teamCheck = true,
-    weapon = true, wpnCol = Color3.fromRGB(255, 190, 60),
+    weapon = true, espNum = true, lblCol = Color3.fromRGB(255, 190, 60),
     tracer = true, tracerCol = Color3.fromRGB(255, 255, 255), tracerFrom = "bottom",
+    seen = true, seenMax = 10,
+    sDot = false, sBox = true, sNum = true, sWeapon = true, sTime = true,
+    sDotCol = Color3.fromRGB(120, 200, 255),
+    sBoxCol = Color3.fromRGB(120, 200, 255),
+    sTxtCol = Color3.fromRGB(255, 255, 255),
     head = true, torso = true, arms = false, legs = true,
     opacity = 0.35,
     boxCol = Color3.fromRGB(255, 50, 50),
@@ -31,7 +42,8 @@ S.fov.Transparency, S.fov.Color, S.fov.Visible = 1, cfg.fovCol, false
 local ids = {}
 for i = 1, MAX do ids[i] = tostring(i) end
 
-local vis, boxOn, wOn, lnOn, wTxt, triN = {}, {}, {}, {}, {}, {}
+local vis, boxOn, lblOn, lnOn, lblTxt, triN = {}, {}, {}, {}, {}, {}
+local gDv, gBv, gTv, gTen, gRev, gAt, gLbl = {}, {}, {}, {}, {}, {}, {}
 
 local function modelFingerprint(m)
     if not m then return nil end
@@ -94,13 +106,13 @@ local function getTri(i, k)
     return t
 end
 
-local function getWpn(i)
-    local d = S.wpn[i]
+local function getLbl(i)
+    local d = S.lbl[i]
     if not d then
         d = Drawing.new("Text")
         d.Size, d.Center, d.Outline, d.Font = 14, true, true, 2
-        d.Color, d.Visible = cfg.wpnCol, false
-        S.wpn[i] = d
+        d.Color, d.Visible = cfg.lblCol, false
+        S.lbl[i] = d
     end
     return d
 end
@@ -116,6 +128,25 @@ local function getLine(i)
     return l
 end
 
+local function ensureGhost(i)
+    if S.gTxt[i] then return end
+
+    local t = Drawing.new("Text")
+    t.Size, t.Center, t.Outline, t.Font = 15, true, true, 2
+    t.Color, t.Visible = cfg.sTxtCol, false
+    S.gTxt[i] = t
+
+    local b = Drawing.new("Square")
+    b.Filled, b.Thickness, b.Visible = false, 1, false
+    b.Color = cfg.sBoxCol
+    S.gBox[i] = b
+
+    local d = Drawing.new("Circle")
+    d.Filled, d.NumSides, d.Radius, d.Thickness = true, 12, 4, 1
+    d.Color, d.Visible = cfg.sDotCol, false
+    S.gDot[i] = d
+end
+
 local function restyle()
     for _, pool in pairs(S.tris) do
         for _, t in pairs(pool) do
@@ -124,15 +155,28 @@ local function restyle()
         end
     end
     for _, b in pairs(S.boxes) do b.Color = cfg.boxCol end
-    for _, d in pairs(S.wpn) do d.Color = cfg.wpnCol end
+    for _, d in pairs(S.lbl) do d.Color = cfg.lblCol end
     for _, l in pairs(S.lines) do l.Color = cfg.tracerCol end
+    for _, d in pairs(S.gTxt) do d.Color = cfg.sTxtCol end
+    for _, d in pairs(S.gBox) do d.Color = cfg.sBoxCol end
+    for _, d in pairs(S.gDot) do d.Color = cfg.sDotCol end
+end
+
+local function ghostVis(i, dot, box, txt)
+    if gDv[i] ~= dot then S.gDot[i].Visible = dot gDv[i] = dot end
+    if gBv[i] ~= box then S.gBox[i].Visible = box gBv[i] = box end
+    if gTv[i] ~= txt then S.gTxt[i].Visible = txt gTv[i] = txt end
+end
+
+local function hideGhost(i)
+    if S.gTxt[i] then ghostVis(i, false, false, false) end
 end
 
 local function hideSlot(i)
     if not vis[i] then return end
     vis[i] = false
     if boxOn[i] then S.boxes[i].Visible = false boxOn[i] = false end
-    if wOn[i] then S.wpn[i].Visible = false wOn[i] = false end
+    if lblOn[i] then S.lbl[i].Visible = false lblOn[i] = false end
     if lnOn[i] then S.lines[i].Visible = false lnOn[i] = false end
     local pool = S.tris[i]
     for k = 1, triN[i] or 0 do pool[k].Visible = false end
@@ -140,7 +184,10 @@ local function hideSlot(i)
 end
 
 local function hideAll()
-    for i = 1, MAX do hideSlot(i) end
+    for i = 1, MAX do
+        hideSlot(i)
+        hideGhost(i)
+    end
 end
 
 local function pick(v) return type(v) == "table" and v[1] or v end
@@ -151,7 +198,7 @@ local function buildMenu()
     local win = Lib:CreateWindow({
         title = "Character ESP",
         subtitle = "auto",
-        size = Vector2.new(640, 500),
+        size = Vector2.new(640, 520),
         menuKey = "p",
         configName = "charesp",
         configFolder = "charesp",
@@ -181,11 +228,12 @@ local function buildMenu()
         restyle()
     end)
 
-    local wpnT = main:Toggle("Weapon labels", cfg.weapon, function(v) cfg.weapon = v end)
-    wpnT:AddColorpicker("Label color", cfg.wpnCol, function(c)
-        cfg.wpnCol = c
+    local numT = main:Toggle("Player number", cfg.espNum, function(v) cfg.espNum = v rev = rev + 1 end)
+    numT:AddColorpicker("Label color", cfg.lblCol, function(c)
+        cfg.lblCol = c
         restyle()
     end)
+    main:Toggle("Weapon", cfg.weapon, function(v) cfg.weapon = v rev = rev + 1 end)
 
     local trT = main:Toggle("Tracers", cfg.tracer, function(v) cfg.tracer = v end)
     trT:AddColorpicker("Tracer color", cfg.tracerCol, function(c)
@@ -207,6 +255,31 @@ local function buildMenu()
     parts:Toggle("Torso", cfg.torso, function(v) cfg.torso = v end)
     parts:Toggle("Arms", cfg.arms, function(v) cfg.arms = v end)
     parts:Toggle("Legs", cfg.legs, function(v) cfg.legs = v end)
+
+    local seenTab = win:Tab("Last seen", "eye")
+
+    local ls = seenTab:Section("Last seen", "Left", "where they were before the server hid them")
+    ls:Toggle("Enabled", cfg.seen, function(v) cfg.seen = v end)
+    ls:Slider("Show for", cfg.seenMax, 1, 1, 30, "s", function(v) cfg.seenMax = v end)
+
+    local sh = seenTab:Section("Show", "Right")
+    local dotT = sh:Toggle("Dot", cfg.sDot, function(v) cfg.sDot = v end)
+    dotT:AddColorpicker("Dot color", cfg.sDotCol, function(c)
+        cfg.sDotCol = c
+        restyle()
+    end)
+    local sBoxT = sh:Toggle("Box", cfg.sBox, function(v) cfg.sBox = v end)
+    sBoxT:AddColorpicker("Box color", cfg.sBoxCol, function(c)
+        cfg.sBoxCol = c
+        restyle()
+    end)
+    sh:Toggle("Player number", cfg.sNum, function(v) cfg.sNum = v rev = rev + 1 end)
+    sh:Toggle("Weapon", cfg.sWeapon, function(v) cfg.sWeapon = v rev = rev + 1 end)
+    sh:Toggle("Time", cfg.sTime, function(v) cfg.sTime = v rev = rev + 1 end)
+    sh:Colorpicker("Text color", cfg.sTxtCol, function(c)
+        cfg.sTxtCol = c
+        restyle()
+    end)
 
     local aimTab = win:Tab("Aim", "crosshair")
 
@@ -283,8 +356,8 @@ local function buildMenu()
     Lib:Notify("Character ESP", "Loaded. Press P to open the menu", 4, "success")
 end
 
-local ok, err = pcall(buildMenu)
-if not ok then print("[CharESP] menu failed (ESP still runs): " .. tostring(err)) end
+local menuOk, menuErr = pcall(buildMenu)
+if not menuOk then print("[CharESP] menu failed (ESP still runs): " .. tostring(menuErr)) end
 if not mousemoverel then print("[CharESP] mousemoverel not found, aim cannot move the mouse") end
 
 local cX, cY, cZ, c00, c01, c02, c10, c11, c12, c20, c21, c22, fL, hW, hH
@@ -389,10 +462,13 @@ local DEFS = {
     },
 }
 
+local function nearSelf(c)
+    local dx, dy, dz = c.px - cX, c.py - cY, c.pz - cZ
+    return dx * dx + dy * dy + dz * dz < 25
+end
+
 local function skip(c)
-    local pos = c.all[1].Position
-    local dx, dy, dz = pos.X - cX, pos.Y - cY, pos.Z - cZ
-    if dx * dx + dy * dy + dz * dz < 25 then return true end
+    if nearSelf(c) then return true end
     return cfg.teamCheck and c.ally
 end
 
@@ -401,6 +477,8 @@ local function buildCache(char)
     local c = {
         char = char, groups = {}, all = {}, complete = true, wait = 0, age = 0,
         ally = char:FindFirstChild("NameTag") ~= nil,
+        hidden = false, px = 0, py = 0, pz = 0,
+        cAt = {}, cx = {}, cy = {}, cz = {},
     }
     for _, key in ipairs(KEYS) do
         local gl = {}
@@ -422,7 +500,7 @@ local function buildCache(char)
     return c
 end
 
-local function refreshWeapon(c)
+local function refreshInfo(c)
     pcall(function()
         local char = c.char
         local wm
@@ -434,13 +512,48 @@ local function refreshWeapon(c)
         end
         local fp = modelFingerprint(wm)
         c.weapon = fp and fpToWeapon[fp] or nil
-
-        local nt = char:FindFirstChild("NameTag")
-        local cg = nt and nt:FindFirstChild("CanvasGroup")
-        local pn = cg and cg:FindFirstChild("PlayerName")
-        local text = pn and pn.Text
-        c.name = (type(text) == "string" and text ~= "") and text or nil
     end)
+end
+
+local function labelText(c)
+    if c.lRev ~= rev or c.lNum ~= c.num or c.lWpn ~= c.weapon then
+        c.lRev, c.lNum, c.lWpn = rev, c.num, c.weapon
+        local parts = {}
+        if cfg.espNum and c.num then parts[#parts + 1] = "Player " .. c.num end
+        if cfg.weapon and c.weapon then parts[#parts + 1] = "[" .. c.weapon .. "]" end
+        c.lbl = table.concat(parts, "  ")
+    end
+    return c.lbl
+end
+
+local function trackVoid(i, c)
+    local pos = c.all[1].Position
+    local x, y, z = pos.X, pos.Y, pos.Z
+    c.px, c.py, c.pz = x, y, z
+
+    if not c.hidden then
+        local gone = y < VOID_Y
+        if c.lx and not gone then
+            local dx, dy, dz = x - c.lx, y - c.ly, z - c.lz
+            gone = dx * dx + dy * dy + dz * dz > JUMP * JUMP
+        end
+        if gone then
+            c.hidden = true
+            c.hx, c.hy, c.hz = x, y, z
+            if DEBUG then print("[CharESP] slot " .. i .. " hidden at y=" .. string.format("%.0f", y)) end
+        else
+            c.lx, c.ly, c.lz = x, y, z
+        end
+    else
+        local dx, dy, dz = x - c.hx, y - c.hy, z - c.hz
+        local moved = dx * dx + dy * dy + dz * dz > JUMP * JUMP
+        local up = y >= VOID_Y and c.hy < VOID_Y
+        if moved or up then
+            c.hidden = false
+            c.lx, c.ly, c.lz = x, y, z
+            if DEBUG then print("[CharESP] slot " .. i .. " visible again") end
+        end
+    end
 end
 
 local stamp, frame = {}, 0
@@ -472,10 +585,14 @@ local function getCache(i, folder)
         if c.age % 10 == 0 then c.ally = char:FindFirstChild("NameTag") ~= nil end
     end
     if #c.all == 0 then return nil end
+    trackVoid(i, c)
     return c
 end
 
 local function groupCenter(c, key)
+    if c.cAt[key] == frame then return c.cx[key], c.cy[key], c.cz[key] end
+    c.cAt[key] = frame
+
     local sx, sy, sz, n = 0, 0, 0, 0
     for _, list in ipairs(c.groups[key]) do
         for _, p in ipairs(list) do
@@ -483,13 +600,103 @@ local function groupCenter(c, key)
             sx, sy, sz, n = sx + pos.X, sy + pos.Y, sz + pos.Z, n + 1
         end
     end
-    if n == 0 then return nil end
-    return sx / n, sy / n, sz / n
+    if n == 0 then
+        c.cx[key], c.cy[key], c.cz[key] = nil, nil, nil
+        return nil
+    end
+    local x, y, z = sx / n, sy / n, sz / n
+    c.cx[key], c.cy[key], c.cz[key] = x, y, z
+    return x, y, z
+end
+
+local function bodyCenter(c)
+    local x, y, z = groupCenter(c, "torso")
+    if x then return x, y, z end
+    return groupCenter(c, "head")
+end
+
+local function record(i, c)
+    local x, y, z = bodyCenter(c)
+    if not x then return end
+    local r = S.seen[i]
+    if not r then r = {} S.seen[i] = r end
+    r.t, r.x, r.y, r.z = tick(), x, y, z
+    r.weapon, r.ally, r.num = c.weapon, c.ally, c.num or i
+end
+
+local function showGhost(i)
+    local r = S.seen[i]
+    if not cfg.seen or not r or (cfg.teamCheck and r.ally) then return hideGhost(i) end
+
+    local age = tick() - r.t
+    if age > cfg.seenMax then return hideGhost(i) end
+
+    local tx, ty = projectPoint(r.x, r.y + UP, r.z)
+    local bx, by = projectPoint(r.x, r.y - DOWN, r.z)
+    if not tx or not bx then return hideGhost(i) end
+
+    ensureGhost(i)
+
+    local tenth = math.floor(age * 10)
+    if gTen[i] ~= tenth or gRev[i] ~= rev or gAt[i] ~= r.t then
+        gTen[i], gRev[i], gAt[i] = tenth, rev, r.t
+
+        local parts = {}
+        if cfg.sNum then parts[#parts + 1] = "Player " .. r.num end
+        if cfg.sWeapon and r.weapon then parts[#parts + 1] = "[" .. r.weapon .. "]" end
+        if cfg.sTime then parts[#parts + 1] = string.format("%.1fs", age) end
+        gLbl[i] = table.concat(parts, "  ")
+
+        local fade = 1 - 0.6 * (age / cfg.seenMax)
+        S.gTxt[i].Text = gLbl[i]
+        S.gTxt[i].Transparency = fade
+        S.gBox[i].Transparency = fade
+        S.gDot[i].Transparency = fade
+    end
+
+    local top = ty < by and ty or by
+    local showDot, showBox = cfg.sDot, cfg.sBox
+    local showTxt = gLbl[i] ~= ""
+
+    if showBox then
+        local h = math.abs(by - ty)
+        local w = h * 0.55
+        local box = S.gBox[i]
+        box.Position = Vector2.new(tx - w * 0.5, top)
+        box.Size = Vector2.new(w, h)
+    end
+    if showDot then
+        local mx, my = projectPoint(r.x, r.y, r.z)
+        if mx then
+            S.gDot[i].Position = Vector2.new(mx, my)
+        else
+            showDot = false
+        end
+    end
+    if showTxt then
+        S.gTxt[i].Position = Vector2.new(tx, top - 18)
+    end
+
+    ghostVis(i, showDot, showBox, showTxt)
 end
 
 local function procChar(i, folder)
     local c = getCache(i, folder)
-    if not c or skip(c) then return hideSlot(i) end
+    if not c or c.hidden then
+        hideSlot(i)
+        return showGhost(i)
+    end
+    if skip(c) then
+        hideSlot(i)
+        return hideGhost(i)
+    end
+
+    if (cfg.weapon or cfg.seen) and (c.infoAt == nil or (frame + i) % 25 == 0) then
+        refreshInfo(c)
+        c.infoAt = frame
+    end
+    if cfg.seen then record(i, c) end
+    hideGhost(i)
 
     local drew = false
     local prev = triN[i] or 0
@@ -554,58 +761,49 @@ local function procChar(i, folder)
         boxOn[i] = false
     end
 
-    local wShown = false
-    if cfg.weapon then
-        if c.wAt == nil or (frame + i) % 25 == 0 then
-            refreshWeapon(c)
-            c.wAt = frame
-        end
-        if c.weapon then
-            local hl = c.groups.head[1]
-            local hp = hl and hl[1]
-            if hp then
-                local pos = hp.Position
-                local sx, sy = projectPoint(pos.X, pos.Y + 2.5, pos.Z)
-                if sx then
-                    local d = getWpn(i)
-                    local txt = c.name and (c.name .. "  [" .. c.weapon .. "]") or ("[" .. c.weapon .. "]")
-                    if wTxt[i] ~= txt then
-                        d.Text = txt
-                        wTxt[i] = txt
-                    end
-                    d.Position = Vector2.new(sx, sy)
-                    if not wOn[i] then d.Visible = true wOn[i] = true end
-                    wShown = true
-                    drew = true
-                end
-            end
-        end
-    end
-    if not wShown and wOn[i] then
-        S.wpn[i].Visible = false
-        wOn[i] = false
-    end
-
-    local tShown = false
-    if cfg.tracer then
-        local x, y, z = groupCenter(c, "torso")
-        if not x then x, y, z = groupCenter(c, "head") end
-        if x then
-            local sx, sy = projectPoint(x, y, z)
+    local lblDrawn = false
+    local txt = labelText(c)
+    if txt ~= "" then
+        local hx, hy, hz = groupCenter(c, "head")
+        if hx then
+            local sx, sy = projectPoint(hx, hy + 2.5, hz)
             if sx then
-                local ox, oy = hW, hH * 2
-                if cfg.tracerFrom == "center" then oy = hH
-                elseif cfg.tracerFrom == "top" then oy = 0 end
-                local ln = getLine(i)
-                ln.From = Vector2.new(ox, oy)
-                ln.To = Vector2.new(sx, sy)
-                if not lnOn[i] then ln.Visible = true lnOn[i] = true end
-                tShown = true
+                local d = getLbl(i)
+                if lblTxt[i] ~= txt then
+                    d.Text = txt
+                    lblTxt[i] = txt
+                end
+                d.Position = Vector2.new(sx, sy)
+                if not lblOn[i] then d.Visible = true lblOn[i] = true end
+                lblDrawn = true
                 drew = true
             end
         end
     end
-    if not tShown and lnOn[i] then
+    if not lblDrawn and lblOn[i] then
+        S.lbl[i].Visible = false
+        lblOn[i] = false
+    end
+
+    local lineDrawn = false
+    if cfg.tracer then
+        local x, y, z = bodyCenter(c)
+        if x then
+            local sx, sy = projectPoint(x, y, z)
+            if sx then
+                local oy = hH * 2
+                if cfg.tracerFrom == "center" then oy = hH
+                elseif cfg.tracerFrom == "top" then oy = 0 end
+                local ln = getLine(i)
+                ln.From = Vector2.new(hW, oy)
+                ln.To = Vector2.new(sx, sy)
+                if not lnOn[i] then ln.Visible = true lnOn[i] = true end
+                lineDrawn = true
+                drew = true
+            end
+        end
+    end
+    if not lineDrawn and lnOn[i] then
         S.lines[i].Visible = false
         lnOn[i] = false
     end
@@ -619,7 +817,7 @@ local function trunc(v) return v >= 0 and math.floor(v) or math.ceil(v) end
 
 local function evalSlot(i, folder, mode)
     local c = getCache(i, folder)
-    if not c or skip(c) then return nil end
+    if not c or c.hidden or skip(c) then return nil end
 
     local bestD, bx, by
     for _, key in ipairs(SETS[mode] or SETS.head) do
@@ -720,18 +918,34 @@ S.conn = RunService.RenderStepped:Connect(function(dt)
     if cfg.weapon and wCount == 0 then
         if frame % 180 == 0 then pcall(buildWeaponMap) end
         if frame == 600 and wCount == 0 then
-            print("weapon list is error")
+            print("[CharESP] weapon list is empty, labels cannot be matched")
         end
     end
 
     updCam()
 
-    if cfg.on and (cfg.box or cfg.chams or cfg.weapon or cfg.tracer) then
+    local esp = cfg.box or cfg.chams or cfg.weapon or cfg.espNum or cfg.tracer or cfg.seen
+    if cfg.on and esp then
+        local enemies, allies = 0, 0
+        for i = 1, MAX do
+            local ok, c = pcall(getCache, i, folder)
+            if ok and c and not nearSelf(c) then
+                if c.ally then
+                    allies = allies + 1
+                    c.num = allies
+                else
+                    enemies = enemies + 1
+                    c.num = enemies
+                end
+            end
+        end
+
         for i = 1, MAX do
             local ok, e = pcall(procChar, i, folder)
             if not ok then
                 S.cache[i] = nil
                 hideSlot(i)
+                hideGhost(i)
                 if not errShown then
                     errShown = true
                     print("[CharESP] slot " .. i .. " error: " .. tostring(e))
@@ -751,8 +965,11 @@ print("[CharESP] running")
 S.cleanup = function()
     if S.conn then pcall(function() S.conn:Disconnect() end) end
     for _, b in pairs(S.boxes) do pcall(function() b:Remove() end) end
-    for _, d in pairs(S.wpn) do pcall(function() d:Remove() end) end
+    for _, d in pairs(S.lbl) do pcall(function() d:Remove() end) end
     for _, l in pairs(S.lines) do pcall(function() l:Remove() end) end
+    for _, d in pairs(S.gTxt) do pcall(function() d:Remove() end) end
+    for _, d in pairs(S.gBox) do pcall(function() d:Remove() end) end
+    for _, d in pairs(S.gDot) do pcall(function() d:Remove() end) end
     for _, pool in pairs(S.tris) do
         for _, t in pairs(pool) do pcall(function() t:Remove() end) end
     end

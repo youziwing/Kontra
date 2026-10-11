@@ -1,14 +1,17 @@
 if _G.CharESP and _G.CharESP.cleanup then pcall(_G.CharESP.cleanup) end
 
 local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
 local MAX = 16
 local TPG = 10
 local FPS = 60
 local SCALE = 2
 local JUMP = 80
-local VOID_Y = -100
+local VOID_Y = -500000
 local UP, DOWN = 2.6, 2.7
+local TICK = 1 / 64
+local MIN_HOLD = TICK * 2
 local DEBUG = false
 local UI_URL = "https://raw.githubusercontent.com/neaxusxgod-png/INS-ui/main/uilib.min.lua"
 
@@ -33,6 +36,13 @@ local cfg = {
     aimHeld = false, aimPart = "head",
     fov = 150, smooth = 6, maxSpeed = 40, sticky = true,
     showFov = true, fovCol = Color3.fromRGB(255, 255, 255),
+    tbHeld = false, tbMode = "tap", tbReact = 0, tbHold = 40, tbGap = 45, tbJit = 25,
+    tbPad = 0.1, tbVis = false, tbFocus = false, tbDebug = false, tbWall = false,
+    tHead = true, tTorso = true, tArms = true, tLegs = true,
+    wallMethod = "auto", wallSize = 3, wallRate = 60, wallDebug = false,
+    aimWall = false, espVis = false,
+    visCol = Color3.fromRGB(80, 255, 120),
+    hidCol = Color3.fromRGB(255, 70, 70),
 }
 
 S.fov = Drawing.new("Circle")
@@ -43,7 +53,12 @@ local ids = {}
 for i = 1, MAX do ids[i] = tostring(i) end
 
 local vis, boxOn, lblOn, lnOn, lblTxt, triN = {}, {}, {}, {}, {}, {}
-local gDv, gBv, gTv, gTen, gRev, gAt, gLbl = {}, {}, {}, {}, {}, {}, {}
+local gDv, gBv, gTv = {}, {}, {}
+local boxSt, triSt = {}, {}
+
+local function wipe(t)
+    for k in pairs(t) do t[k] = nil end
+end
 
 local function modelFingerprint(m)
     if not m then return nil end
@@ -82,15 +97,51 @@ local function buildWeaponMap()
 end
 pcall(buildWeaponMap)
 
-local function getBox(i)
-    local b = S.boxes[i]
-    if not b then
-        b = Drawing.new("Square")
-        b.Filled, b.Thickness, b.Transparency, b.Visible = false, 1, 1, false
-        b.Color = cfg.boxCol
-        S.boxes[i] = b
+local function make(tbl, i, class, init)
+    local d = tbl[i]
+    if not d then
+        d = Drawing.new(class)
+        init(d)
+        tbl[i] = d
     end
-    return b
+    return d
+end
+
+local function toggle(flags, tbl, i, on)
+    if flags[i] == on then return end
+    flags[i] = on
+    local d = tbl[i]
+    if d then d.Visible = on end
+end
+
+local function initBox(d)
+    d.Filled, d.Thickness, d.Transparency, d.Visible = false, 1, 1, false
+    d.Color = cfg.boxCol
+end
+
+local function initLbl(d)
+    d.Size, d.Center, d.Outline, d.Font = 14, true, true, 2
+    d.Color, d.Visible = cfg.lblCol, false
+end
+
+local function initLine(d)
+    d.Thickness, d.Transparency, d.Visible = 1, 1, false
+    d.Color = cfg.tracerCol
+end
+
+local function initGTxt(d)
+    d.Size, d.Center, d.Outline, d.Font = 15, true, true, 2
+    d.Color, d.Visible = cfg.sTxtCol, false
+end
+
+local function initGBox(d)
+    d.Filled, d.Thickness, d.Visible = false, 1, false
+    d.Color = cfg.sBoxCol
+end
+
+local function initGDot(d)
+    d.Filled, d.NumSides, d.Radius, d.Thickness = true, 12, 4, 1
+    d.Color, d.Visible = cfg.sDotCol, false
 end
 
 local function getTri(i, k)
@@ -106,47 +157,6 @@ local function getTri(i, k)
     return t
 end
 
-local function getLbl(i)
-    local d = S.lbl[i]
-    if not d then
-        d = Drawing.new("Text")
-        d.Size, d.Center, d.Outline, d.Font = 14, true, true, 2
-        d.Color, d.Visible = cfg.lblCol, false
-        S.lbl[i] = d
-    end
-    return d
-end
-
-local function getLine(i)
-    local l = S.lines[i]
-    if not l then
-        l = Drawing.new("Line")
-        l.Thickness, l.Transparency, l.Visible = 1, 1, false
-        l.Color = cfg.tracerCol
-        S.lines[i] = l
-    end
-    return l
-end
-
-local function ensureGhost(i)
-    if S.gTxt[i] then return end
-
-    local t = Drawing.new("Text")
-    t.Size, t.Center, t.Outline, t.Font = 15, true, true, 2
-    t.Color, t.Visible = cfg.sTxtCol, false
-    S.gTxt[i] = t
-
-    local b = Drawing.new("Square")
-    b.Filled, b.Thickness, b.Visible = false, 1, false
-    b.Color = cfg.sBoxCol
-    S.gBox[i] = b
-
-    local d = Drawing.new("Circle")
-    d.Filled, d.NumSides, d.Radius, d.Thickness = true, 12, 4, 1
-    d.Color, d.Visible = cfg.sDotCol, false
-    S.gDot[i] = d
-end
-
 local function restyle()
     for _, pool in pairs(S.tris) do
         for _, t in pairs(pool) do
@@ -160,12 +170,14 @@ local function restyle()
     for _, d in pairs(S.gTxt) do d.Color = cfg.sTxtCol end
     for _, d in pairs(S.gBox) do d.Color = cfg.sBoxCol end
     for _, d in pairs(S.gDot) do d.Color = cfg.sDotCol end
+    wipe(boxSt)
+    wipe(triSt)
 end
 
 local function ghostVis(i, dot, box, txt)
-    if gDv[i] ~= dot then S.gDot[i].Visible = dot gDv[i] = dot end
-    if gBv[i] ~= box then S.gBox[i].Visible = box gBv[i] = box end
-    if gTv[i] ~= txt then S.gTxt[i].Visible = txt gTv[i] = txt end
+    toggle(gDv, S.gDot, i, dot)
+    toggle(gBv, S.gBox, i, box)
+    toggle(gTv, S.gTxt, i, txt)
 end
 
 local function hideGhost(i)
@@ -175,9 +187,9 @@ end
 local function hideSlot(i)
     if not vis[i] then return end
     vis[i] = false
-    if boxOn[i] then S.boxes[i].Visible = false boxOn[i] = false end
-    if lblOn[i] then S.lbl[i].Visible = false lblOn[i] = false end
-    if lnOn[i] then S.lines[i].Visible = false lnOn[i] = false end
+    toggle(boxOn, S.boxes, i, false)
+    toggle(lblOn, S.lbl, i, false)
+    toggle(lnOn, S.lines, i, false)
     local pool = S.tris[i]
     for k = 1, triN[i] or 0 do pool[k].Visible = false end
     triN[i] = 0
@@ -198,7 +210,7 @@ local function buildMenu()
     local win = Lib:CreateWindow({
         title = "Character ESP",
         subtitle = "auto",
-        size = Vector2.new(640, 520),
+        size = Vector2.new(640, 560),
         menuKey = "p",
         configName = "charesp",
         configFolder = "charesp",
@@ -302,6 +314,62 @@ local function buildMenu()
         S.fov.Color = c
     end)
 
+    local trigTab = win:Tab("Trigger", "crosshair")
+
+    local tbs = trigTab:Section("Triggerbot", "Left", "hold the key to fire")
+    local tbT = tbs:Toggle("Triggerbot", cfg.tbHeld, function(v) cfg.tbHeld = v end)
+    tbT:AddKeybind("t", "Hold")
+    tbs:Dropdown("Fire mode", {"Tap"}, {"Tap", "Auto"}, false, function(v)
+        cfg.tbMode = string.lower(tostring(pick(v)))
+    end)
+    tbs:Slider("Reaction", cfg.tbReact, 5, 0, 300, "ms", function(v) cfg.tbReact = v end)
+    tbs:Slider("Press time", cfg.tbHold, 5, 20, 150, "ms", function(v) cfg.tbHold = v end)
+    tbs:Slider("Release gap", cfg.tbGap, 5, 20, 200, "ms", function(v) cfg.tbGap = v end)
+    tbs:Slider("Jitter", cfg.tbJit, 1, 0, 60, "%", function(v) cfg.tbJit = v end)
+    tbs:Slider("Padding", cfg.tbPad, 0.05, 0, 1, "studs", function(v) cfg.tbPad = v end)
+    tbs:Toggle("Show hitboxes", cfg.tbVis, function(v) cfg.tbVis = v end)
+    tbs:Toggle("Require game focus", cfg.tbFocus, function(v) cfg.tbFocus = v end)
+    tbs:Toggle("Debug (console)", cfg.tbDebug, function(v) cfg.tbDebug = v end)
+
+    local fireOn = trigTab:Section("Fire on", "Right", "which body parts count")
+    fireOn:Toggle("Head", cfg.tHead, function(v) cfg.tHead = v end)
+    fireOn:Toggle("Torso", cfg.tTorso, function(v) cfg.tTorso = v end)
+    fireOn:Toggle("Arms", cfg.tArms, function(v) cfg.tArms = v end)
+    fireOn:Toggle("Legs", cfg.tLegs, function(v) cfg.tLegs = v end)
+
+    local wallTab = win:Tab("Wall", "eye")
+
+    local wc = wallTab:Section("Wall check", "Left", "is anything solid between you and them")
+    wc:Dropdown("Method", {"Auto"}, {"Auto", "Raycast", "Geometry"}, false, function(v)
+        cfg.wallMethod = string.lower(tostring(pick(v)))
+        S.wallAuto = nil
+    end)
+    wc:Slider("Min wall size", cfg.wallSize, 0.5, 0, 20, "studs", function(v)
+        cfg.wallSize = v
+        S.geoAt = -1e9
+    end)
+    wc:Slider("Check rate", cfg.wallRate, 10, 0, 500, "ms", function(v) cfg.wallRate = v end)
+    wc:Toggle("Debug (console)", cfg.wallDebug, function(v) cfg.wallDebug = v end)
+
+    local use = wallTab:Section("Use it on", "Right")
+    use:Toggle("Triggerbot", cfg.tbWall, function(v) cfg.tbWall = v end)
+    use:Toggle("Aim", cfg.aimWall, function(v) cfg.aimWall = v end)
+    use:Toggle("ESP colors", cfg.espVis, function(v)
+        cfg.espVis = v
+        wipe(boxSt)
+        wipe(triSt)
+    end)
+    use:Colorpicker("Visible color", cfg.visCol, function(c)
+        cfg.visCol = c
+        wipe(boxSt)
+        wipe(triSt)
+    end)
+    use:Colorpicker("Hidden color", cfg.hidCol, function(c)
+        cfg.hidCol = c
+        wipe(boxSt)
+        wipe(triSt)
+    end)
+
     local menu = win:SettingsSection("Menu", "Right")
 
     menu:Keybind("Menu key", "p", function(key)
@@ -359,6 +427,7 @@ end
 local menuOk, menuErr = pcall(buildMenu)
 if not menuOk then print("[CharESP] menu failed (ESP still runs): " .. tostring(menuErr)) end
 if not mousemoverel then print("[CharESP] mousemoverel not found, aim cannot move the mouse") end
+if not (mouse1press and mouse1release) then print("[CharESP] mouse1press/mouse1release not found, triggerbot cannot fire") end
 
 local cX, cY, cZ, c00, c01, c02, c10, c11, c12, c20, c21, c22, fL, hW, hH
 
@@ -445,6 +514,7 @@ end
 
 local KEYS = { "head", "torso", "arms", "legs" }
 local SETS = { head = { "head" }, torso = { "torso" }, arms = { "arms" }, legs = { "legs" }, closest = KEYS }
+local TKEY = { head = "tHead", torso = "tTorso", arms = "tArms", legs = "tLegs" }
 local DEFS = {
     R15 = {
         head = { { "Head" } },
@@ -475,10 +545,11 @@ end
 local function buildCache(char)
     local def = char:FindFirstChild("UpperTorso") and DEFS.R15 or DEFS.R6
     local c = {
-        char = char, groups = {}, all = {}, complete = true, wait = 0, age = 0,
+        char = char, groups = {}, all = {}, kinds = {}, complete = true, wait = 0, age = 0,
         ally = char:FindFirstChild("NameTag") ~= nil,
         hidden = false, px = 0, py = 0, pz = 0,
         cAt = {}, cx = {}, cy = {}, cz = {},
+        wt = {}, wv = {},
     }
     for _, key in ipairs(KEYS) do
         local gl = {}
@@ -489,6 +560,7 @@ local function buildCache(char)
                 if p and p:IsA("BasePart") then
                     list[#list + 1] = p
                     c.all[#c.all + 1] = p
+                    c.kinds[#c.all] = key
                 else
                     c.complete = false
                 end
@@ -502,9 +574,8 @@ end
 
 local function refreshInfo(c)
     pcall(function()
-        local char = c.char
         local wm
-        for _, ch in ipairs(char:GetChildren()) do
+        for _, ch in ipairs(c.char:GetChildren()) do
             if ch.ClassName == "Model" then
                 wm = ch
                 break
@@ -615,6 +686,198 @@ local function bodyCenter(c)
     return groupCenter(c, "head")
 end
 
+local function slab(d, f, h, lo, hi)
+    if math.abs(f) < 1e-6 then
+        if d - h > 0 or d + h < 0 then return nil end
+        return lo, hi
+    end
+    local t1, t2 = (d - h) / f, (d + h) / f
+    if t1 > t2 then t1, t2 = t2, t1 end
+    if t1 > lo then lo = t1 end
+    if t2 < hi then hi = t2 end
+    if lo > hi then return nil end
+    return lo, hi
+end
+
+local SOLID = { Part = true, MeshPart = true, UnionOperation = true }
+local GEO = { list = {}, n = 0, at = -1e9, busy = false, want = nil }
+S.geoAt = nil
+
+local function geoAdd(d)
+    if not SOLID[d.ClassName] then return end
+    local s = d.Size
+    local sx, sy, sz = s.X, s.Y, s.Z
+    if math.max(sx, sy, sz) < cfg.wallSize or d.CanCollide == false or d.Transparency > 0.9 then return end
+    local x, y, z, r00, r01, r02, r10, r11, r12, r20, r21, r22 = d.CFrame:GetComponents()
+    local hx, hy, hz = sx * 0.5, sy * 0.5, sz * 0.5
+    GEO.wn = GEO.wn + 1
+    GEO.work[GEO.wn] = {
+        x, y, z, r00, r01, r02, r10, r11, r12, r20, r21, r22,
+        hx, hy, hz, math.sqrt(hx * hx + hy * hy + hz * hz),
+    }
+end
+
+local function geoPump(folder, now)
+    if S.geoAt then
+        GEO.at, S.geoAt = S.geoAt, nil
+    end
+    if not GEO.busy then
+        if now - GEO.at < 20 then return end
+        local roots = {}
+        local cam = workspace.CurrentCamera
+        for _, ch in ipairs(workspace:GetChildren()) do
+            if ch ~= folder and ch ~= cam and ch.ClassName ~= "Terrain" then
+                roots[#roots + 1] = ch
+            end
+        end
+        GEO.roots, GEO.ri, GEO.work, GEO.wn = roots, 0, {}, 0
+        GEO.cur, GEO.ci, GEO.busy = nil, 0, true
+    end
+
+    local budget = 300
+    while budget > 0 do
+        if not GEO.cur then
+            GEO.ri = GEO.ri + 1
+            local root = GEO.roots[GEO.ri]
+            if not root then
+                GEO.list, GEO.n, GEO.at, GEO.busy, GEO.work = GEO.work, GEO.wn, now, false, nil
+                if cfg.wallDebug then print("[CharESP] wall geometry: " .. GEO.n .. " solid parts") end
+                return
+            end
+            pcall(geoAdd, root)
+            local ok, d = pcall(function() return root:GetDescendants() end)
+            GEO.cur, GEO.ci = ok and d or {}, 0
+            budget = budget - 1
+        else
+            GEO.ci = GEO.ci + 1
+            local d = GEO.cur[GEO.ci]
+            if d then
+                pcall(geoAdd, d)
+                budget = budget - 1
+            else
+                GEO.cur = nil
+            end
+        end
+    end
+end
+
+local function geoBlocked(tx, ty, tz)
+    GEO.want = tick()
+    local list = GEO.list
+    local ax, ay, az = cX, cY, cZ
+    local dx, dy, dz = tx - ax, ty - ay, tz - az
+    local len2 = dx * dx + dy * dy + dz * dz
+    if len2 < 0.01 then return false end
+
+    for k = 1, GEO.n do
+        local b = list[k]
+        local px, py, pz = b[1] - ax, b[2] - ay, b[3] - az
+        local t = (px * dx + py * dy + pz * dz) / len2
+        if t < 0 then t = 0 elseif t > 1 then t = 1 end
+        local qx, qy, qz = px - dx * t, py - dy * t, pz - dz * t
+        local r = b[16]
+
+        if qx * qx + qy * qy + qz * qz <= r * r then
+            local lax = -(b[4] * px + b[7] * py + b[10] * pz)
+            local lay = -(b[5] * px + b[8] * py + b[11] * pz)
+            local laz = -(b[6] * px + b[9] * py + b[12] * pz)
+            local hx, hy, hz = b[13], b[14], b[15]
+
+            if not (math.abs(lax) < hx and math.abs(lay) < hy and math.abs(laz) < hz) then
+                local ldx = b[4] * dx + b[7] * dy + b[10] * dz
+                local ldy = b[5] * dx + b[8] * dy + b[11] * dz
+                local ldz = b[6] * dx + b[9] * dy + b[12] * dz
+
+                local lo, hi = slab(-lax, ldx, hx, 0, 0.97)
+                if lo then lo, hi = slab(-lay, ldy, hy, lo, hi) end
+                if lo then lo = slab(-laz, ldz, hz, lo, hi) end
+                if lo then return true end
+            end
+        end
+    end
+    return false
+end
+
+local function probeRay()
+    local o = Vector3.new(cX, cY, cZ)
+    local dirs = {
+        Vector3.new(0, -3000, 0), Vector3.new(0, 3000, 0),
+        Vector3.new(3000, 0, 0), Vector3.new(-3000, 0, 0),
+        Vector3.new(0, 0, 3000), Vector3.new(0, 0, -3000),
+    }
+    for _, d in ipairs(dirs) do
+        local ok, res = pcall(function() return workspace:Raycast(o, d) end)
+        if ok and res and res.Instance then return true end
+    end
+    return false
+end
+
+local function wallMethod()
+    local m = cfg.wallMethod
+    if m == "raycast" then return "ray" end
+    if m == "geometry" then return "geo" end
+    if not S.wallAuto then
+        S.wallAuto = probeRay() and "ray" or "geo"
+        print("[CharESP] wall check method: " .. (S.wallAuto == "ray" and "raycast" or "geometry"))
+    end
+    return S.wallAuto
+end
+
+local function passable(inst, folder, me, cam)
+    if me and inst:IsDescendantOf(me) then return true end
+    if inst:IsDescendantOf(cam) or inst:IsDescendantOf(folder) then return true end
+    if inst.CanCollide == false or (inst.Transparency or 0) > 0.9 then return true end
+    local s = inst.Size
+    return s ~= nil and math.max(s.X, s.Y, s.Z) < cfg.wallSize
+end
+
+local function rayBlocker(tx, ty, tz, char, folder)
+    local cam = workspace.CurrentCamera
+    local lp = Players.LocalPlayer
+    local me = lp and lp.Character
+    local from = Vector3.new(cX, cY, cZ)
+    local to = Vector3.new(tx, ty, tz)
+
+    for _ = 1, 8 do
+        local dir = to - from
+        if dir.Magnitude < 0.05 then return nil end
+        local ok, res = pcall(function() return workspace:Raycast(from, dir) end)
+        local inst = ok and res and res.Instance
+        if not inst or inst:IsDescendantOf(char) then return nil end
+        if not passable(inst, folder, me, cam) then return inst end
+        from = res.Position + dir.Unit * 0.15
+    end
+    return nil
+end
+
+local function blocked(x, y, z, char, folder)
+    if wallMethod() == "ray" then
+        local inst = rayBlocker(x, y, z, char, folder)
+        return inst ~= nil, inst
+    end
+    return geoBlocked(x, y, z), nil
+end
+
+local function exposed(c, key, x, y, z, folder, now)
+    local at = c.wt[key]
+    if at and now - at < cfg.wallRate / 1000 then return c.wv[key] end
+    c.wt[key] = now
+    local ok, isWall = pcall(blocked, x, y, z, c.char, folder)
+    c.wv[key] = not (ok and isWall)
+    return c.wv[key]
+end
+
+local function stateOf(c)
+    if not cfg.espVis or c.shown == nil then return "b" end
+    return c.shown and "v" or "h"
+end
+
+local function colorFor(st, base)
+    if st == "v" then return cfg.visCol end
+    if st == "h" then return cfg.hidCol end
+    return base
+end
+
 local function record(i, c)
     local x, y, z = bodyCenter(c)
     if not x then return end
@@ -622,6 +885,10 @@ local function record(i, c)
     if not r then r = {} S.seen[i] = r end
     r.t, r.x, r.y, r.z = tick(), x, y, z
     r.weapon, r.ally, r.num = c.weapon, c.ally, c.num or i
+end
+
+local function ghostParts(i)
+    return make(S.gTxt, i, "Text", initGTxt), make(S.gBox, i, "Square", initGBox), make(S.gDot, i, "Circle", initGDot)
 end
 
 local function showGhost(i)
@@ -635,49 +902,156 @@ local function showGhost(i)
     local bx, by = projectPoint(r.x, r.y - DOWN, r.z)
     if not tx or not bx then return hideGhost(i) end
 
-    ensureGhost(i)
+    local txt, box, dot = ghostParts(i)
 
     local tenth = math.floor(age * 10)
-    if gTen[i] ~= tenth or gRev[i] ~= rev or gAt[i] ~= r.t then
-        gTen[i], gRev[i], gAt[i] = tenth, rev, r.t
+    if r.lt ~= tenth or r.lr ~= rev or r.la ~= r.t then
+        r.lt, r.lr, r.la = tenth, rev, r.t
 
         local parts = {}
         if cfg.sNum then parts[#parts + 1] = "Player " .. r.num end
         if cfg.sWeapon and r.weapon then parts[#parts + 1] = "[" .. r.weapon .. "]" end
         if cfg.sTime then parts[#parts + 1] = string.format("%.1fs", age) end
-        gLbl[i] = table.concat(parts, "  ")
+        r.lbl = table.concat(parts, "  ")
 
         local fade = 1 - 0.6 * (age / cfg.seenMax)
-        S.gTxt[i].Text = gLbl[i]
-        S.gTxt[i].Transparency = fade
-        S.gBox[i].Transparency = fade
-        S.gDot[i].Transparency = fade
+        txt.Text = r.lbl
+        txt.Transparency, box.Transparency, dot.Transparency = fade, fade, fade
     end
 
     local top = ty < by and ty or by
-    local showDot, showBox = cfg.sDot, cfg.sBox
-    local showTxt = gLbl[i] ~= ""
+    local showDot, showBox, showTxt = cfg.sDot, cfg.sBox, r.lbl ~= ""
 
     if showBox then
         local h = math.abs(by - ty)
         local w = h * 0.55
-        local box = S.gBox[i]
         box.Position = Vector2.new(tx - w * 0.5, top)
         box.Size = Vector2.new(w, h)
     end
     if showDot then
         local mx, my = projectPoint(r.x, r.y, r.z)
         if mx then
-            S.gDot[i].Position = Vector2.new(mx, my)
+            dot.Position = Vector2.new(mx, my)
         else
             showDot = false
         end
     end
     if showTxt then
-        S.gTxt[i].Position = Vector2.new(tx, top - 18)
+        txt.Position = Vector2.new(tx, top - 18)
     end
 
     ghostVis(i, showDot, showBox, showTxt)
+end
+
+local function drawChams(i, c, st)
+    local prev = triN[i] or 0
+    local ti = 0
+
+    if cfg.chams then
+        for _, key in ipairs(KEYS) do
+            if cfg[key] then
+                for _, list in ipairs(c.groups[key]) do
+                    local n = 0
+                    for _, p in ipairs(list) do n = projectPart(p, SCALE, n) end
+                    local hn = n >= 3 and buildHull(n) or 0
+                    if hn >= 3 then
+                        local cx, cy = 0, 0
+                        for k = 1, hn do cx = cx + H[k][1] cy = cy + H[k][2] end
+                        local center = Vector2.new(cx / hn, cy / hn)
+                        for k = 1, hn < TPG and hn or TPG do
+                            local nx = k % hn + 1
+                            ti = ti + 1
+                            local t = getTri(i, ti)
+                            t.PointA = center
+                            t.PointB = Vector2.new(H[k][1], H[k][2])
+                            t.PointC = Vector2.new(H[nx][1], H[nx][2])
+                            if ti > prev then t.Visible = true end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    local pool = S.tris[i]
+    for j = ti + 1, prev do pool[j].Visible = false end
+    triN[i] = ti
+
+    if ti > prev then triSt[i] = nil end
+    if ti > 0 and triSt[i] ~= st then
+        local col = colorFor(st, cfg.chamCol)
+        for k = 1, ti do pool[k].Color = col end
+        triSt[i] = st
+    end
+    return ti > 0
+end
+
+local function drawBox(i, c, st)
+    if cfg.box then
+        local n = 0
+        for _, p in ipairs(c.all) do n = projectPart(p, 1, n) end
+        if n > 0 then
+            local minX, minY, maxX, maxY = BX[1], BY[1], BX[1], BY[1]
+            for k = 2, n do
+                local x, y = BX[k], BY[k]
+                if x < minX then minX = x elseif x > maxX then maxX = x end
+                if y < minY then minY = y elseif y > maxY then maxY = y end
+            end
+            if maxX > 0 and minX < hW * 2 and maxY > 0 and minY < hH * 2 then
+                local box = make(S.boxes, i, "Square", initBox)
+                box.Position = Vector2.new(minX, minY)
+                box.Size = Vector2.new(maxX - minX, maxY - minY)
+                if boxSt[i] ~= st then
+                    box.Color = colorFor(st, cfg.boxCol)
+                    boxSt[i] = st
+                end
+                toggle(boxOn, S.boxes, i, true)
+                return true
+            end
+        end
+    end
+    toggle(boxOn, S.boxes, i, false)
+    return false
+end
+
+local function drawLabel(i, c)
+    local txt = labelText(c)
+    if txt ~= "" then
+        local hx, hy, hz = groupCenter(c, "head")
+        local sx, sy
+        if hx then sx, sy = projectPoint(hx, hy + 2.5, hz) end
+        if sx then
+            local d = make(S.lbl, i, "Text", initLbl)
+            if lblTxt[i] ~= txt then
+                d.Text = txt
+                lblTxt[i] = txt
+            end
+            d.Position = Vector2.new(sx, sy)
+            toggle(lblOn, S.lbl, i, true)
+            return true
+        end
+    end
+    toggle(lblOn, S.lbl, i, false)
+    return false
+end
+
+local function drawTracer(i, c)
+    if cfg.tracer then
+        local x, y, z = bodyCenter(c)
+        local sx, sy
+        if x then sx, sy = projectPoint(x, y, z) end
+        if sx then
+            local oy = hH * 2
+            if cfg.tracerFrom == "center" then oy = hH
+            elseif cfg.tracerFrom == "top" then oy = 0 end
+            local ln = make(S.lines, i, "Line", initLine)
+            ln.From, ln.To = Vector2.new(hW, oy), Vector2.new(sx, sy)
+            toggle(lnOn, S.lines, i, true)
+            return true
+        end
+    end
+    toggle(lnOn, S.lines, i, false)
+    return false
 end
 
 local function procChar(i, folder)
@@ -698,117 +1072,19 @@ local function procChar(i, folder)
     if cfg.seen then record(i, c) end
     hideGhost(i)
 
-    local drew = false
-    local prev = triN[i] or 0
-    local ti = 0
-
-    if cfg.chams then
-        for _, key in ipairs(KEYS) do
-            if cfg[key] then
-                for _, list in ipairs(c.groups[key]) do
-                    local n = 0
-                    for _, p in ipairs(list) do n = projectPart(p, SCALE, n) end
-                    if n >= 3 then
-                        local hn = buildHull(n)
-                        if hn >= 3 then
-                            local cx, cy = 0, 0
-                            for k = 1, hn do cx = cx + H[k][1] cy = cy + H[k][2] end
-                            local center = Vector2.new(cx / hn, cy / hn)
-                            local cnt = hn < TPG and hn or TPG
-                            for k = 1, cnt do
-                                local nx = k % hn + 1
-                                ti = ti + 1
-                                local t = getTri(i, ti)
-                                t.PointA = center
-                                t.PointB = Vector2.new(H[k][1], H[k][2])
-                                t.PointC = Vector2.new(H[nx][1], H[nx][2])
-                                if ti > prev then t.Visible = true end
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-    local pool = S.tris[i]
-    for j = ti + 1, prev do pool[j].Visible = false end
-    triN[i] = ti
-    if ti > 0 then drew = true end
-
-    local boxDrawn = false
-    if cfg.box then
-        local n = 0
-        for _, p in ipairs(c.all) do n = projectPart(p, 1, n) end
-        if n > 0 then
-            local minX, minY, maxX, maxY = BX[1], BY[1], BX[1], BY[1]
-            for k = 2, n do
-                local x, y = BX[k], BY[k]
-                if x < minX then minX = x elseif x > maxX then maxX = x end
-                if y < minY then minY = y elseif y > maxY then maxY = y end
-            end
-            if maxX > 0 and minX < hW * 2 and maxY > 0 and minY < hH * 2 then
-                local box = getBox(i)
-                box.Position = Vector2.new(minX, minY)
-                box.Size = Vector2.new(maxX - minX, maxY - minY)
-                if not boxOn[i] then box.Visible = true boxOn[i] = true end
-                boxDrawn = true
-                drew = true
-            end
-        end
-    end
-    if not boxDrawn and boxOn[i] then
-        S.boxes[i].Visible = false
-        boxOn[i] = false
-    end
-
-    local lblDrawn = false
-    local txt = labelText(c)
-    if txt ~= "" then
-        local hx, hy, hz = groupCenter(c, "head")
-        if hx then
-            local sx, sy = projectPoint(hx, hy + 2.5, hz)
-            if sx then
-                local d = getLbl(i)
-                if lblTxt[i] ~= txt then
-                    d.Text = txt
-                    lblTxt[i] = txt
-                end
-                d.Position = Vector2.new(sx, sy)
-                if not lblOn[i] then d.Visible = true lblOn[i] = true end
-                lblDrawn = true
-                drew = true
-            end
-        end
-    end
-    if not lblDrawn and lblOn[i] then
-        S.lbl[i].Visible = false
-        lblOn[i] = false
-    end
-
-    local lineDrawn = false
-    if cfg.tracer then
+    if cfg.espVis then
         local x, y, z = bodyCenter(c)
-        if x then
-            local sx, sy = projectPoint(x, y, z)
-            if sx then
-                local oy = hH * 2
-                if cfg.tracerFrom == "center" then oy = hH
-                elseif cfg.tracerFrom == "top" then oy = 0 end
-                local ln = getLine(i)
-                ln.From = Vector2.new(hW, oy)
-                ln.To = Vector2.new(sx, sy)
-                if not lnOn[i] then ln.Visible = true lnOn[i] = true end
-                lineDrawn = true
-                drew = true
-            end
-        end
+        if x then c.shown = exposed(c, "body", x, y, z, folder, tick()) end
+    else
+        c.shown = nil
     end
-    if not lineDrawn and lnOn[i] then
-        S.lines[i].Visible = false
-        lnOn[i] = false
-    end
+    local st = stateOf(c)
 
-    vis[i] = drew
+    local a = drawChams(i, c, st)
+    local b = drawBox(i, c, st)
+    local l = drawLabel(i, c)
+    local t = drawTracer(i, c)
+    vis[i] = a or b or l or t
 end
 
 local remX, remY = 0, 0
@@ -819,15 +1095,19 @@ local function evalSlot(i, folder, mode)
     local c = getCache(i, folder)
     if not c or c.hidden or skip(c) then return nil end
 
+    local now = tick()
+    local reach = cfg.fov * 1.5
     local bestD, bx, by
     for _, key in ipairs(SETS[mode] or SETS.head) do
         local x, y, z = groupCenter(c, key)
-        if x then
-            local sx, sy = projectPoint(x, y, z)
-            if sx then
-                local dx, dy = sx - hW, sy - hH
-                local d = math.sqrt(dx * dx + dy * dy)
-                if not bestD or d < bestD then bestD, bx, by = d, sx, sy end
+        local sx, sy
+        if x then sx, sy = projectPoint(x, y, z) end
+        if sx then
+            local dx, dy = sx - hW, sy - hH
+            local d = math.sqrt(dx * dx + dy * dy)
+            if d <= reach and (not bestD or d < bestD)
+                and (not cfg.aimWall or exposed(c, key, x, y, z, folder, now)) then
+                bestD, bx, by = d, sx, sy
             end
         end
     end
@@ -878,6 +1158,200 @@ local function aimStep(folder)
     if ix ~= 0 or iy ~= 0 then mousemoverel(ix, iy) end
 end
 
+local tb = { down = false, since = 0, hold = 0.04, nextAt = 0, armed = nil, slot = nil,
+             wallAt = 0, walled = false, chkAt = 0, ok = true, sqN = 0 }
+
+local function jit(ms)
+    local j = cfg.tbJit / 100
+    return ms * (1 + (math.random() * 2 - 1) * j) / 1000
+end
+
+local function press(now)
+    if pcall(mouse1press) then
+        tb.down, tb.since = true, now
+    end
+end
+
+local function lift()
+    pcall(mouse1release)
+    tb.down = false
+end
+
+local function playerAlive(now)
+    if now < tb.chkAt then return tb.ok end
+    tb.chkAt = now + 0.2
+    tb.ok = true
+    local lp = Players.LocalPlayer
+    if lp then
+        local ok, h = pcall(function() return lp:GetAttribute("Health") end)
+        if ok and type(h) == "number" and h <= 0 then tb.ok = false end
+    end
+    return tb.ok
+end
+
+local function scan(c, fx, fy, fz)
+    local bx, by, bz = bodyCenter(c)
+    if not bx then return nil end
+
+    local dx, dy, dz = bx - cX, by - cY, bz - cZ
+    local along = dx * fx + dy * fy + dz * fz
+    if along < 0.5 then return nil end
+
+    local qx, qy, qz = dx - along * fx, dy - along * fy, dz - along * fz
+    local perp2 = qx * qx + qy * qy + qz * qz
+    if perp2 > 36 then return nil, nil, perp2 end
+
+    local pad = cfg.tbPad
+    local bestT, bestKey
+    local all, kinds = c.all, c.kinds
+
+    for k = 1, #all do
+        local key = kinds[k]
+        if cfg[TKEY[key]] then
+            local p = all[k]
+            local x, y, z, r00, r01, r02, r10, r11, r12, r20, r21, r22 = p.CFrame:GetComponents()
+            local s = p.Size
+
+            local ex, ey, ez = x - cX, y - cY, z - cZ
+            local lcx = r00 * ex + r10 * ey + r20 * ez
+            local lcy = r01 * ex + r11 * ey + r21 * ez
+            local lcz = r02 * ex + r12 * ey + r22 * ez
+            local ldx = r00 * fx + r10 * fy + r20 * fz
+            local ldy = r01 * fx + r11 * fy + r21 * fz
+            local ldz = r02 * fx + r12 * fy + r22 * fz
+
+            local lo, hi = slab(lcx, ldx, s.X * 0.5 + pad, 0, 1e9)
+            if lo then lo, hi = slab(lcy, ldy, s.Y * 0.5 + pad, lo, hi) end
+            if lo then lo = slab(lcz, ldz, s.Z * 0.5 + pad, lo, hi) end
+            if lo and (not bestT or lo < bestT) then bestT, bestKey = lo, key end
+        end
+    end
+    return bestT, bestKey, perp2
+end
+
+local function drawHitboxes(c, on)
+    local pool = S.tbSq
+    local n = 0
+    if c then
+        if not pool then pool = {} S.tbSq = pool end
+        for k = 1, #c.all do
+            if projectPart(c.all[k], 1, 0) == 8 then
+                local minX, minY, maxX, maxY = BX[1], BY[1], BX[1], BY[1]
+                for j = 2, 8 do
+                    local x, y = BX[j], BY[j]
+                    if x < minX then minX = x elseif x > maxX then maxX = x end
+                    if y < minY then minY = y elseif y > maxY then maxY = y end
+                end
+                n = n + 1
+                local sq = pool[n]
+                if not sq then
+                    sq = Drawing.new("Square")
+                    sq.Filled, sq.Thickness, sq.Transparency = false, 1, 1
+                    pool[n] = sq
+                end
+                sq.Color = on and Color3.fromRGB(80, 255, 120) or Color3.fromRGB(0, 255, 255)
+                sq.Position = Vector2.new(minX, minY)
+                sq.Size = Vector2.new(maxX - minX, maxY - minY)
+                sq.Visible = true
+            end
+        end
+    end
+    for k = n + 1, tb.sqN do pool[k].Visible = false end
+    tb.sqN = n
+end
+
+local function trigIdle(now)
+    tb.armed, tb.slot, tb.walled = nil, nil, false
+    if tb.down and now - tb.since >= tb.hold then lift() end
+end
+
+local function trigStep(folder)
+    local now = tick()
+
+    local active = cfg.tbHeld
+    if active and cfg.tbFocus and isrbxactive and not isrbxactive() then
+        active = false
+        if cfg.tbDebug and not tb.warned then
+            tb.warned = true
+            print("[TB] game window not focused (isrbxactive is false)")
+        end
+    end
+    if active and not playerAlive(now) then active = false end
+
+    local fx, fy, fz = -c02, -c12, -c22
+    local hit, hitT, hitKey, hitSlot, near, nearP
+
+    if active or cfg.tbVis then
+        for i = 1, MAX do
+            local ok, c = pcall(getCache, i, folder)
+            if ok and c and not c.hidden and not skip(c) then
+                local ok2, t, key, perp2 = pcall(scan, c, fx, fy, fz)
+                if ok2 then
+                    if t and (not hitT or t < hitT) then hit, hitT, hitKey, hitSlot = c, t, key, i end
+                    if perp2 and (not nearP or perp2 < nearP) then near, nearP = c, perp2 end
+                end
+            end
+        end
+    end
+
+    local shown = cfg.tbVis and (hit or near) or nil
+    if shown or tb.sqN > 0 then drawHitboxes(shown, hit ~= nil) end
+
+    if not active then
+        trigIdle(now)
+        return
+    end
+
+    local ready = false
+    if hit then
+        if tb.slot ~= hitSlot then
+            tb.slot, tb.armed, tb.walled = hitSlot, nil, false
+        end
+        if not tb.armed then tb.armed = now + jit(cfg.tbReact) end
+        ready = now >= tb.armed
+
+        if ready and cfg.tbWall then
+            if now >= tb.wallAt then
+                tb.wallAt = now + 0.05
+                local px, py, pz = cX + fx * hitT, cY + fy * hitT, cZ + fz * hitT
+                local okW, isWall = pcall(blocked, px, py, pz, hit.char, folder)
+                tb.walled = okW and isWall == true
+            end
+            if tb.walled then ready = false end
+        end
+    else
+        tb.slot, tb.armed, tb.walled = nil, nil, false
+    end
+
+    if cfg.tbMode == "auto" then
+        if ready then
+            if not tb.down and now >= tb.nextAt then
+                tb.hold = math.max(jit(cfg.tbHold), MIN_HOLD)
+                press(now)
+                if cfg.tbDebug and tb.down then
+                    print(string.format("[TB] hold on slot %d (%s) at %.0f studs", hitSlot, hitKey, hitT))
+                end
+            end
+        elseif tb.down and now - tb.since >= tb.hold then
+            lift()
+            tb.nextAt = now + TICK
+        end
+    else
+        if tb.down then
+            if now - tb.since >= tb.hold then
+                lift()
+                tb.nextAt = now + math.max(jit(cfg.tbGap), MIN_HOLD)
+            end
+        elseif ready and now >= tb.nextAt then
+            tb.hold = math.max(jit(cfg.tbHold), MIN_HOLD)
+            press(now)
+            if cfg.tbDebug and tb.down then
+                print(string.format("[TB] tap on slot %d (%s) at %.0f studs", hitSlot, hitKey, hitT))
+            end
+        end
+    end
+end
+
 local fovOn, fovX, fovY, fovR = false, 0, 0, 0
 
 local function hideFov()
@@ -901,69 +1375,80 @@ end
 local step, acc = 1 / FPS, 0
 local errShown = false
 
+local function drawAll(folder)
+    local esp = cfg.box or cfg.chams or cfg.weapon or cfg.espNum or cfg.tracer or cfg.seen
+    if not (cfg.on and esp) then return hideAll() end
+
+    local enemies, allies = 0, 0
+    for i = 1, MAX do
+        local ok, c = pcall(getCache, i, folder)
+        if ok and c and not nearSelf(c) then
+            if c.ally then
+                allies = allies + 1
+                c.num = allies
+            else
+                enemies = enemies + 1
+                c.num = enemies
+            end
+        end
+    end
+
+    for i = 1, MAX do
+        local ok, e = pcall(procChar, i, folder)
+        if not ok then
+            S.cache[i] = nil
+            hideSlot(i)
+            hideGhost(i)
+            if not errShown then
+                errShown = true
+                print("[CharESP] slot " .. i .. " error: " .. tostring(e))
+            end
+        end
+    end
+end
+
 S.conn = RunService.RenderStepped:Connect(function(dt)
     acc = acc + dt
-    if acc < step then return end
-    acc = acc - step
+    local due = acc >= step
+    if due then acc = acc - step end
+    if not (due or cfg.tbHeld) then return end
     frame = frame + 1
 
     local folder = workspace:FindFirstChild("Characters")
     if not folder then
         hideAll()
         hideFov()
+        drawHitboxes(nil)
+        trigIdle(tick())
         S.lock = nil
         return
     end
 
-    if cfg.weapon and wCount == 0 then
-        if frame % 180 == 0 then pcall(buildWeaponMap) end
-        if frame == 600 and wCount == 0 then
-            print("[CharESP] weapon list is empty, labels cannot be matched")
-        end
-    end
-
     updCam()
 
-    local esp = cfg.box or cfg.chams or cfg.weapon or cfg.espNum or cfg.tracer or cfg.seen
-    if cfg.on and esp then
-        local enemies, allies = 0, 0
-        for i = 1, MAX do
-            local ok, c = pcall(getCache, i, folder)
-            if ok and c and not nearSelf(c) then
-                if c.ally then
-                    allies = allies + 1
-                    c.num = allies
-                else
-                    enemies = enemies + 1
-                    c.num = enemies
-                end
-            end
-        end
+    local now = tick()
+    if GEO.want and now - GEO.want < 2 then pcall(geoPump, folder, now) end
 
-        for i = 1, MAX do
-            local ok, e = pcall(procChar, i, folder)
-            if not ok then
-                S.cache[i] = nil
-                hideSlot(i)
-                hideGhost(i)
-                if not errShown then
-                    errShown = true
-                    print("[CharESP] slot " .. i .. " error: " .. tostring(e))
-                end
+    if due then
+        if cfg.weapon and wCount == 0 then
+            if frame % 180 == 0 then pcall(buildWeaponMap) end
+            if frame == 600 and wCount == 0 then
+                print("[CharESP] weapon list is empty, labels cannot be matched")
             end
         end
-    else
-        hideAll()
+        drawAll(folder)
+        pcall(aimStep, folder)
+        pcall(updFov)
     end
 
-    pcall(aimStep, folder)
-    pcall(updFov)
+    pcall(trigStep, folder)
 end)
 
 print("[CharESP] running")
 
 S.cleanup = function()
     if S.conn then pcall(function() S.conn:Disconnect() end) end
+    if tb.down and mouse1release then pcall(mouse1release) end
     for _, b in pairs(S.boxes) do pcall(function() b:Remove() end) end
     for _, d in pairs(S.lbl) do pcall(function() d:Remove() end) end
     for _, l in pairs(S.lines) do pcall(function() l:Remove() end) end
@@ -972,6 +1457,9 @@ S.cleanup = function()
     for _, d in pairs(S.gDot) do pcall(function() d:Remove() end) end
     for _, pool in pairs(S.tris) do
         for _, t in pairs(pool) do pcall(function() t:Remove() end) end
+    end
+    if S.tbSq then
+        for _, q in pairs(S.tbSq) do pcall(function() q:Remove() end) end
     end
     if S.fov then pcall(function() S.fov:Remove() end) end
     if S.win then pcall(function() S.win:Destroy() end) end

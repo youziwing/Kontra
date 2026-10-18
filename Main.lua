@@ -1,3 +1,4 @@
+if _G.SoundESP and _G.SoundESP.Stop then pcall(_G.SoundESP.Stop) end
 if _G.CharESP and _G.CharESP.cleanup then pcall(_G.CharESP.cleanup) end
 
 local RunService = game:GetService("RunService")
@@ -17,6 +18,7 @@ local UI_URL = "https://raw.githubusercontent.com/neaxusxgod-png/INS-ui/main/uil
 
 local S = { boxes = {}, tris = {}, cache = {}, lbl = {}, lines = {}, seen = {}, gTxt = {}, gBox = {}, gDot = {} }
 _G.CharESP = S
+_G.Kontra = S
 
 local rev = 0
 
@@ -43,7 +45,208 @@ local cfg = {
     aimWall = false, espVis = false,
     visCol = Color3.fromRGB(80, 255, 120),
     hidCol = Color3.fromRGB(255, 70, 70),
+    snd = {
+        on = true,
+        teamOnly = false,
+        pollRate = 0.03,
+        pool = 128,
+        range = 400,
+        tracers = false,
+        maxPerNamePerTick = 8,
+        life = { step = 3.5, land = 2.5, fire = 1.6, relo = 1.4, impact = 1.4, misc = 1.6 },
+        categories = { step = true, fire = true, relo = false, impact = true, misc = true },
+        cols = {
+            enemy = Color3.fromRGB(255, 70, 60),
+            ally  = Color3.fromRGB(90, 170, 255),
+            unk   = Color3.fromRGB(225, 225, 225),
+            trac  = Color3.fromRGB(255, 60, 50),
+        },
+    },
 }
+
+S.snd = { running = true, marks = {}, markIdx = 0, emitCount = 0, dot = {}, txt = {}, line = {} }
+
+local SNDMAX = 128
+for i = 1, SNDMAX do
+    local c = Drawing.new("Circle")
+    c.Thickness, c.Filled, c.NumSides, c.Radius, c.Visible = 1, true, 10, 3, false
+    S.snd.dot[i] = c
+    local t = Drawing.new("Text")
+    t.Size, t.Center, t.Outline, t.Font, t.Color, t.Visible = 12, true, true, 2, cfg.snd.cols.unk, false
+    S.snd.txt[i] = t
+    local l = Drawing.new("Line")
+    l.Thickness, l.Color, l.Visible = 1, cfg.snd.cols.trac, false
+    S.snd.line[i] = l
+end
+
+local function kindOf(name)
+    if name:sub(1, 10) == "Footsteps." then return "step" end
+    if name:sub(1, 8) == "Impacts." then return "impact" end
+    if name:sub(1, 8) == "Weapons." then
+        if name:sub(-5):lower() == ".fire" then return "fire" end
+        return "relo"
+    end
+    if name:sub(1, 5) == "Misc." then return "misc" end
+    return nil
+end
+
+local function teamOfSound(name)
+    if name:sub(-2) == "Ct" then return "CT" end
+    if name:sub(-1) == "T" and name:sub(-2) ~= "Ct" then return "T" end
+    return nil
+end
+
+local function matOf(name)
+    local tail = name:match("%.([A-Za-z%-]+)C?T?$")
+    return tail and tail:lower() or ""
+end
+
+S.snd.lastCounts, S.snd.recent = {}, {}
+task.spawn(function()
+    while S.snd.running do
+        if cfg.snd.on then
+            local deb    = workspace:FindFirstChild("Debris")
+            local sounds = deb and deb:FindFirstChild("Sounds")
+            if sounds then
+                local lp     = Players.LocalPlayer
+                local myTeam = lp and lp:GetAttribute("Team") or nil
+                local parts  = sounds:GetChildren()
+                local cur    = {}
+                for i = 1, #parts do
+                    local nm = parts[i].Name
+                    cur[nm] = (cur[nm] or 0) + 1
+                end
+                for name, cnt in pairs(cur) do
+                    local kind = kindOf(name)
+                    if kind and cfg.snd.categories[kind] then
+                        local prev = S.snd.lastCounts[name] or 0
+                        local rec  = S.snd.recent[name] or {}
+                        local now  = tick()
+                        local freshPos, seenPos = {}, {}
+                        for i = #parts, 1, -1 do
+                            local p = parts[i]
+                            if p.Name == name then
+                                local pos = p.Position
+                                if pos then
+                                    local key = string.format("%d|%.0f|%.0f|%.0f", math.floor(pos.Y * 4), pos.X, pos.Y, pos.Z)
+                                    if not seenPos[key] and not rec[key] then
+                                        seenPos[key] = true
+                                        freshPos[#freshPos + 1] = { pos = pos, key = key }
+                                    end
+                                end
+                            end
+                        end
+                        local wanted = math.min(cnt - prev, cfg.snd.maxPerNamePerTick)
+                        if wanted > 0 then
+                            local team = teamOfSound(name)
+                            if cfg.snd.teamOnly and team and myTeam and team == myTeam then
+                                for i = 1, wanted do
+                                    local c = freshPos[i] or freshPos[#freshPos]
+                                    if c then rec[c.key] = now end
+                                end
+                            else
+                                local col = (team == nil and cfg.snd.cols.unk) or (team == myTeam and cfg.snd.cols.ally or cfg.snd.cols.enemy)
+                                for i = 1, wanted do
+                                    local c = freshPos[i] or freshPos[#freshPos]
+                                    if c then
+                                        rec[c.key] = now
+                                        S.snd.emitCount = S.snd.emitCount + 1
+                                        S.snd.markIdx = S.snd.markIdx % cfg.snd.pool + 1
+                                        S.snd.marks[S.snd.markIdx] = {
+                                            pos  = c.pos,
+                                            born = now,
+                                            team = team or "unk",
+                                            col  = col,
+                                            kind = kind,
+                                            txt  = kind == "step" and "step" or (kind == "impact" and ("land " .. matOf(name)) or matOf(name)),
+                                            life = cfg.snd.life[kind] or 2,
+                                            big  = kind == "step",
+                                        }
+                                    end
+                                end
+                            end
+                            for k in pairs(rec) do
+                                if now - rec[k] > 4 then rec[k] = nil end
+                            end
+                            S.snd.recent[name] = rec
+                        end
+                    end
+                end
+                S.snd.lastCounts = cur
+            end
+        end
+        task.wait(cfg.snd.pollRate)
+    end
+end)
+
+local sndVp = Vector2.new(1920, 1080)
+S.snd.conn = RunService.RenderStepped:Connect(function()
+    local now    = tick()
+    local cam    = workspace.CurrentCamera
+    local camPos = cam and cam.CFrame.Position
+    if cam then sndVp = cam.ViewportSize or sndVp end
+    local n = math.min(cfg.snd.pool, SNDMAX)
+    for i = 1, n do
+        local d, t, l = S.snd.dot[i], S.snd.txt[i], S.snd.line[i]
+        local m = S.snd.marks[i]
+        if m and camPos then
+            local age = now - m.born
+            if age > m.life then
+                S.snd.marks[i] = nil
+                d.Visible, t.Visible, l.Visible = false, false, false
+            else
+                local scr, vis = WorldToScreen(m.pos)
+                if vis then
+                    local dist = (m.pos - camPos).Magnitude
+                    if dist < cfg.snd.range then
+                        local alpha = 1 - (age / m.life) * 0.9
+                        d.Radius = m.big and math.clamp(240 / dist, 3.5, 7) or math.clamp(170 / dist, 2, 4.5)
+                        d.Color = m.col
+                        d.Transparency = 1 - alpha
+                        d.Position = scr
+                        d.Visible = true
+                        t.Text = m.txt
+                        t.Transparency = 1 - alpha
+                        t.Position = Vector2.new(scr.X, scr.Y - 11)
+                        t.Visible = true
+                        if cfg.snd.tracers then
+                            l.From = Vector2.new(sndVp.X * 0.5, sndVp.Y)
+                            l.To = scr
+                            l.Transparency = 1 - alpha
+                            l.Visible = true
+                        else
+                            l.Visible = false
+                        end
+                    else
+                        d.Visible, t.Visible, l.Visible = false, false, false
+                    end
+                else
+                    d.Visible, t.Visible, l.Visible = false, false, false
+                end
+            end
+        else
+            d.Visible, t.Visible, l.Visible = false, false, false
+        end
+    end
+    for i = n + 1, SNDMAX do
+        S.snd.dot[i].Visible = false
+        S.snd.txt[i].Visible = false
+        S.snd.line[i].Visible = false
+    end
+end)
+
+local function stopSounds()
+    S.snd.running = false
+    if S.snd.conn then pcall(function() S.snd.conn:Disconnect() end) end
+    for i = 1, SNDMAX do
+        S.snd.dot[i].Visible = false
+        S.snd.txt[i].Visible = false
+        S.snd.line[i].Visible = false
+    end
+    for k in pairs(S.snd.lastCounts) do S.snd.lastCounts[k] = nil end
+    for k in pairs(S.snd.marks) do S.snd.marks[k] = nil end
+    print("Sound ESP stopped")
+end
 
 S.fov = Drawing.new("Circle")
 S.fov.Filled, S.fov.NumSides, S.fov.Thickness = false, 64, 1
@@ -170,6 +373,7 @@ local function restyle()
     for _, d in pairs(S.gTxt) do d.Color = cfg.sTxtCol end
     for _, d in pairs(S.gBox) do d.Color = cfg.sBoxCol end
     for _, d in pairs(S.gDot) do d.Color = cfg.sDotCol end
+    for _, d in pairs(S.snd.line) do d.Color = cfg.snd.cols.trac end
     wipe(boxSt)
     wipe(triSt)
 end
@@ -208,12 +412,12 @@ local function buildMenu()
     local Lib = loadstring(game:HttpGet(UI_URL))() or INSUI
 
     local win = Lib:CreateWindow({
-        title = "Character ESP",
+        title = "Kontra Suite",
         subtitle = "auto",
         size = Vector2.new(640, 560),
         menuKey = "p",
-        configName = "charesp",
-        configFolder = "charesp",
+        configName = "kontra",
+        configFolder = "kontra",
         autoSave = true,
     })
     S.win = win
@@ -292,6 +496,40 @@ local function buildMenu()
         cfg.sTxtCol = c
         restyle()
     end)
+
+    local sndTab = win:Tab("Sounds", "sound")
+
+    local sndMain = sndTab:Section("Sound ESP", "Left", "positional emitters in Debris.Sounds")
+    local sndT = sndMain:Toggle("Enabled", cfg.snd.on, function(v)
+        cfg.snd.on = v
+        Lib:Notify("Sound ESP", v and "enabled" or "disabled", 2, v and "success" or "warning")
+    end)
+    sndT:AddKeybind("k", "Toggle")
+    sndMain:Toggle("Hide allied events", cfg.snd.teamOnly, function(v) cfg.snd.teamOnly = v end)
+    sndMain:Toggle("Tracers", cfg.snd.tracers, function(v) cfg.snd.tracers = v end)
+    sndMain:Slider("Range", cfg.snd.range, 5, 50, 1000, "studs", function(v) cfg.snd.range = v end)
+    sndMain:Slider("Max markers", cfg.snd.pool, 8, 16, SNDMAX, "", function(v) cfg.snd.pool = math.min(v, SNDMAX) end)
+    sndMain:Slider("Scan rate", cfg.snd.pollRate, 0.01, 0.01, 0.2, "s", function(v) cfg.snd.pollRate = v end)
+    sndMain:Slider("Max per name/tick", cfg.snd.maxPerNamePerTick, 1, 1, 32, "", function(v) cfg.snd.maxPerNamePerTick = v end)
+
+    local sndCat = sndTab:Section("Categories", "Right", "which events get markers")
+    sndCat:Toggle("Footsteps", cfg.snd.categories.step, function(v) cfg.snd.categories.step = v end)
+    sndCat:Toggle("Gunfire", cfg.snd.categories.fire, function(v) cfg.snd.categories.fire = v end)
+    sndCat:Toggle("Reloads", cfg.snd.categories.relo, function(v) cfg.snd.categories.relo = v end)
+    sndCat:Toggle("Impacts", cfg.snd.categories.impact, function(v) cfg.snd.categories.impact = v end)
+    sndCat:Toggle("Misc", cfg.snd.categories.misc, function(v) cfg.snd.categories.misc = v end)
+
+    local sndLife = sndTab:Section("Marker life", "Left", "seconds until fade")
+    sndLife:Slider("Footstep", cfg.snd.life.step, 0.5, 0.5, 10, "s", function(v) cfg.snd.life.step = v end)
+    sndLife:Slider("Gunfire", cfg.snd.life.fire, 0.5, 0.5, 10, "s", function(v) cfg.snd.life.fire = v end)
+    sndLife:Slider("Impact", cfg.snd.life.impact, 0.5, 0.5, 10, "s", function(v) cfg.snd.life.impact = v end)
+    sndLife:Slider("Misc", cfg.snd.life.misc, 0.5, 0.5, 10, "s", function(v) cfg.snd.life.misc = v end)
+
+    local sndColT = sndTab:Section("Colors", "Right", "applied live to the pool")
+    sndColT:Colorpicker("Enemy", cfg.snd.cols.enemy, function(c) cfg.snd.cols.enemy = c end)
+    sndColT:Colorpicker("Ally", cfg.snd.cols.ally, function(c) cfg.snd.cols.ally = c end)
+    sndColT:Colorpicker("Unknown", cfg.snd.cols.unk, function(c) cfg.snd.cols.unk = c end)
+    sndColT:Colorpicker("Tracer", cfg.snd.cols.trac, function(c) cfg.snd.cols.trac = c end)
 
     local aimTab = win:Tab("Aim", "crosshair")
 
@@ -421,13 +659,13 @@ local function buildMenu()
     menu:Button("Open settings", function() Lib:OpenSettings() end)
         :AddButton("Open search", function() Lib:OpenSpotlight() end)
 
-    Lib:Notify("Character ESP", "Loaded. Press P to open the menu", 4, "success")
+    Lib:Notify("Kontra Suite", "Loaded. Press P to open the menu", 4, "success")
 end
 
 local menuOk, menuErr = pcall(buildMenu)
-if not menuOk then print("[CharESP] menu failed (ESP still runs): " .. tostring(menuErr)) end
-if not mousemoverel then print("[CharESP] mousemoverel not found, aim cannot move the mouse") end
-if not (mouse1press and mouse1release) then print("[CharESP] mouse1press/mouse1release not found, triggerbot cannot fire") end
+if not menuOk then print("[Kontra] menu failed (ESP still runs): " .. tostring(menuErr)) end
+if not mousemoverel then print("[Kontra] mousemoverel not found, aim cannot move the mouse") end
+if not (mouse1press and mouse1release) then print("[Kontra] mouse1press/mouse1release not found, triggerbot cannot fire") end
 
 local cX, cY, cZ, c00, c01, c02, c10, c11, c12, c20, c21, c22, fL, hW, hH
 
@@ -1249,7 +1487,7 @@ local function drawHitboxes(c, on)
                     sq.Filled, sq.Thickness, sq.Transparency = false, 1, 1
                     pool[n] = sq
                 end
-                sq.Color = on and Color3.fromRGB(80, 255, 120) or Color3.fromRGB(0, 255, 255)
+                sq.Color = on and cfg.visCol or Color3.fromRGB(0, 255, 255)
                 sq.Position = Vector2.new(minX, minY)
                 sq.Size = Vector2.new(maxX - minX, maxY - minY)
                 sq.Visible = true
@@ -1446,7 +1684,20 @@ end)
 
 print("[CharESP] running")
 
+_G.SoundESP = {
+    Config = cfg.snd,
+    Log = function()
+        local parts = {}
+        for name, cnt in pairs(S.snd.lastCounts) do parts[#parts + 1] = name .. ":" .. cnt end
+        local live = 0
+        for i = 1, SNDMAX do if S.snd.marks[i] then live = live + 1 end end
+        print("emitted:", S.snd.emitCount, "| marks live:", live, "| events: " .. table.concat(parts, " | "))
+    end,
+    Stop = stopSounds,
+}
+
 S.cleanup = function()
+    stopSounds()
     if S.conn then pcall(function() S.conn:Disconnect() end) end
     if tb.down and mouse1release then pcall(mouse1release) end
     for _, b in pairs(S.boxes) do pcall(function() b:Remove() end) end
@@ -1462,5 +1713,10 @@ S.cleanup = function()
         for _, q in pairs(S.tbSq) do pcall(function() q:Remove() end) end
     end
     if S.fov then pcall(function() S.fov:Remove() end) end
+    if S.snd then
+        for _, d in ipairs(S.snd.dot) do pcall(function() d:Remove() end) end
+        for _, d in ipairs(S.snd.txt) do pcall(function() d:Remove() end) end
+        for _, d in ipairs(S.snd.line) do pcall(function() d:Remove() end) end
+    end
     if S.win then pcall(function() S.win:Destroy() end) end
 end

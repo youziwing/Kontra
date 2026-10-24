@@ -13,6 +13,9 @@ local VOID_Y = -500000
 local UP, DOWN = 2.6, 2.7
 local TICK = 1 / 64
 local MIN_HOLD = TICK * 2
+local WALK_MAX = 12
+local DUCK_H = 4.0
+local B3W, B3H = 1.1, 2.7
 local DEBUG = false
 local UI_URL = "https://raw.githubusercontent.com/neaxusxgod-png/INS-ui/main/uilib.min.lua"
 
@@ -45,6 +48,19 @@ local cfg = {
     aimWall = false, espVis = false,
     visCol = Color3.fromRGB(80, 255, 120),
     hidCol = Color3.fromRGB(255, 70, 70),
+    e = {
+        boxStyle = "full", boxThick = 1, fill = false, fillAlpha = 0.15,
+        skel = true, skelCol = Color3.fromRGB(255, 255, 255), skelThick = 1, headDot = true,
+        outline = false, outCol = Color3.fromRGB(255, 255, 255), outThick = 1, outScale = 1.1, outGlow = false,
+        look = false, lookCol = Color3.fromRGB(255, 230, 80), lookLen = 5,
+        arrows = true, arrowCol = Color3.fromRGB(255, 80, 80), arrowSize = 14, arrowRad = 75,
+        dist = true, flags = true, scaleText = true, fade = false, maxDist = 2000,
+        allyHp = true, colorMode = "static",
+        closest = true, focusCol = Color3.fromRGB(255, 220, 0),
+        radar = false, radarSize = 140, radarRange = 120, radarX = 20, radarY = 150,
+        radarEnemy = Color3.fromRGB(255, 70, 60), radarAlly = Color3.fromRGB(90, 170, 255),
+        hud = false,
+    },
     snd = {
         on = true,
         teamOnly = false,
@@ -57,16 +73,16 @@ local cfg = {
         categories = { step = true, fire = true, relo = false, impact = true, misc = true },
         cols = {
             enemy = Color3.fromRGB(255, 70, 60),
-            ally  = Color3.fromRGB(90, 170, 255),
-            unk   = Color3.fromRGB(225, 225, 225),
-            trac  = Color3.fromRGB(255, 60, 50),
+            ally = Color3.fromRGB(90, 170, 255),
+            unk = Color3.fromRGB(225, 225, 225),
+            trac = Color3.fromRGB(255, 60, 50),
         },
     },
 }
 
 S.snd = { running = true, marks = {}, markIdx = 0, emitCount = 0, dot = {}, txt = {}, line = {} }
-
 local SNDMAX = 128
+
 for i = 1, SNDMAX do
     local c = Drawing.new("Circle")
     c.Thickness, c.Filled, c.NumSides, c.Radius, c.Visible = 1, true, 10, 3, false
@@ -102,16 +118,17 @@ local function matOf(name)
 end
 
 S.snd.lastCounts, S.snd.recent = {}, {}
+
 task.spawn(function()
     while S.snd.running do
         if cfg.snd.on then
-            local deb    = workspace:FindFirstChild("Debris")
+            local deb = workspace:FindFirstChild("Debris")
             local sounds = deb and deb:FindFirstChild("Sounds")
             if sounds then
-                local lp     = Players.LocalPlayer
+                local lp = Players.LocalPlayer
                 local myTeam = lp and lp:GetAttribute("Team") or nil
-                local parts  = sounds:GetChildren()
-                local cur    = {}
+                local parts = sounds:GetChildren()
+                local cur = {}
                 for i = 1, #parts do
                     local nm = parts[i].Name
                     cur[nm] = (cur[nm] or 0) + 1
@@ -120,8 +137,8 @@ task.spawn(function()
                     local kind = kindOf(name)
                     if kind and cfg.snd.categories[kind] then
                         local prev = S.snd.lastCounts[name] or 0
-                        local rec  = S.snd.recent[name] or {}
-                        local now  = tick()
+                        local rec = S.snd.recent[name] or {}
+                        local now = tick()
                         local freshPos, seenPos = {}, {}
                         for i = #parts, 1, -1 do
                             local p = parts[i]
@@ -153,14 +170,14 @@ task.spawn(function()
                                         S.snd.emitCount = S.snd.emitCount + 1
                                         S.snd.markIdx = S.snd.markIdx % cfg.snd.pool + 1
                                         S.snd.marks[S.snd.markIdx] = {
-                                            pos  = c.pos,
+                                            pos = c.pos,
                                             born = now,
                                             team = team or "unk",
-                                            col  = col,
+                                            col = col,
                                             kind = kind,
-                                            txt  = kind == "step" and "step" or (kind == "impact" and ("land " .. matOf(name)) or matOf(name)),
+                                            txt = kind == "step" and "step" or (kind == "impact" and ("land " .. matOf(name)) or matOf(name)),
                                             life = cfg.snd.life[kind] or 2,
-                                            big  = kind == "step",
+                                            big = kind == "step",
                                         }
                                     end
                                 end
@@ -180,9 +197,10 @@ task.spawn(function()
 end)
 
 local sndVp = Vector2.new(1920, 1080)
+
 S.snd.conn = RunService.RenderStepped:Connect(function()
-    local now    = tick()
-    local cam    = workspace.CurrentCamera
+    local now = tick()
+    local cam = workspace.CurrentCamera
     local camPos = cam and cam.CFrame.Position
     if cam then sndVp = cam.ViewportSize or sndVp end
     local n = math.min(cfg.snd.pool, SNDMAX)
@@ -247,6 +265,7 @@ local function stopSounds()
     for k in pairs(S.snd.marks) do S.snd.marks[k] = nil end
     print("Sound ESP stopped")
 end
+_G.SoundESP = { Stop = stopSounds }
 
 S.fov = Drawing.new("Circle")
 S.fov.Filled, S.fov.NumSides, S.fov.Thickness = false, 64, 1
@@ -347,6 +366,22 @@ local function initGDot(d)
     d.Color, d.Visible = cfg.sDotCol, false
 end
 
+local function initFill(d)
+    d.Filled, d.Thickness, d.Transparency, d.Visible = true, 1, 1, false
+end
+
+local function initHead(d)
+    d.Filled, d.NumSides, d.Thickness, d.Transparency, d.Visible = false, 24, 1, 1, false
+end
+
+local function initInfo(d)
+    d.Size, d.Center, d.Outline, d.Font, d.Visible = 13, true, true, 2, false
+end
+
+local function initArrow(d)
+    d.Filled, d.Transparency, d.Visible = true, 1, false
+end
+
 local function getTri(i, k)
     local pool = S.tris[i]
     if not pool then pool = {} S.tris[i] = pool end
@@ -360,6 +395,80 @@ local function getTri(i, k)
     return t
 end
 
+local X = {}
+S.x = X
+
+local function xget(i)
+    local x = X[i]
+    if not x then
+        x = { v = {} }
+        X[i] = x
+    end
+    return x
+end
+
+local function lpool(x, name, n)
+    local p = x[name]
+    if not p then
+        p = { n = 0, on = 0 }
+        x[name] = p
+    end
+    while p.n < n do
+        p.n = p.n + 1
+        local l = Drawing.new("Line")
+        l.Transparency, l.Visible = 1, false
+        p[p.n] = l
+    end
+    return p
+end
+
+local function lend(p, used)
+    for k = used + 1, p.on do p[k].Visible = false end
+    p.on = used
+end
+
+local function xpool(x, name, n, want)
+    if want then return lpool(x, name, n) end
+    local p = x[name]
+    if p and p.on > 0 then lend(p, 0) end
+    return nil
+end
+
+local function seg(l, x1, y1, x2, y2, col, th, a)
+    l.From, l.To = Vector2.new(x1, y1), Vector2.new(x2, y2)
+    l.Color, l.Thickness, l.Transparency, l.Visible = col, th, a, true
+end
+
+local function single(x, name, class, init)
+    local d = x[name]
+    if not d then
+        d = Drawing.new(class)
+        init(d)
+        x[name] = d
+    end
+    return d
+end
+
+local function sv(x, name, on)
+    if x.v[name] == on then return end
+    x.v[name] = on
+    local d = x[name]
+    if d then d.Visible = on end
+end
+
+local POOLS = { "skel", "corn", "b3", "out", "hp" }
+local ONES = { "head", "look", "fill", "info", "arr", "arrT" }
+
+local function hideX(i)
+    local x = X[i]
+    if not x then return end
+    for _, name in ipairs(POOLS) do
+        local p = x[name]
+        if p and p.on > 0 then lend(p, 0) end
+    end
+    for _, name in ipairs(ONES) do sv(x, name, false) end
+end
+
 local function restyle()
     for _, pool in pairs(S.tris) do
         for _, t in pairs(pool) do
@@ -367,7 +476,6 @@ local function restyle()
             t.Transparency = cfg.opacity
         end
     end
-    for _, b in pairs(S.boxes) do b.Color = cfg.boxCol end
     for _, d in pairs(S.lbl) do d.Color = cfg.lblCol end
     for _, l in pairs(S.lines) do l.Color = cfg.tracerCol end
     for _, d in pairs(S.gTxt) do d.Color = cfg.sTxtCol end
@@ -394,6 +502,7 @@ local function hideSlot(i)
     toggle(boxOn, S.boxes, i, false)
     toggle(lblOn, S.lbl, i, false)
     toggle(lnOn, S.lines, i, false)
+    hideX(i)
     local pool = S.tris[i]
     for k = 1, triN[i] or 0 do pool[k].Visible = false end
     triN[i] = 0
@@ -410,6 +519,7 @@ local function pick(v) return type(v) == "table" and v[1] or v end
 
 local function buildMenu()
     local Lib = loadstring(game:HttpGet(UI_URL))() or INSUI
+    local e = cfg.e
 
     local win = Lib:CreateWindow({
         title = "Kontra Suite",
@@ -433,12 +543,9 @@ local function buildMenu()
     en:AddKeybind("n", "Toggle")
 
     local boxT = main:Toggle("Box", cfg.box, function(v) cfg.box = v end)
-    boxT:AddColorpicker("Box color", cfg.boxCol, function(c)
-        cfg.boxCol = c
-        restyle()
-    end)
+    boxT:AddColorpicker("Box color", cfg.boxCol, function(c) cfg.boxCol = c end)
 
-    local chamT = main:Toggle("Chams", cfg.chams, function(v) cfg.chams = v end)
+    local chamT = main:Toggle("Chams (filled)", cfg.chams, function(v) cfg.chams = v end)
     chamT:AddColorpicker("Chams color", cfg.chamCol, function(c)
         cfg.chamCol = c
         restyle()
@@ -466,11 +573,72 @@ local function buildMenu()
     end)
     main:Toggle("Team check", cfg.teamCheck, function(v) cfg.teamCheck = v end)
 
-    local parts = tab:Section("Chams Body Parts", "Right", "box always covers the whole body")
+    local parts = tab:Section("Chams / outline parts", "Right", "box always covers the whole body")
     parts:Toggle("Head", cfg.head, function(v) cfg.head = v end)
     parts:Toggle("Torso", cfg.torso, function(v) cfg.torso = v end)
     parts:Toggle("Arms", cfg.arms, function(v) cfg.arms = v end)
     parts:Toggle("Legs", cfg.legs, function(v) cfg.legs = v end)
+
+    local vtab = win:Tab("Visuals", "eye")
+
+    local bx = vtab:Section("Box", "Left", "needs Box on in the ESP tab")
+    bx:Dropdown("Style", {"Full"}, {"Full", "Corners", "3D"}, false, function(v)
+        e.boxStyle = string.lower(tostring(pick(v)))
+    end)
+    bx:Slider("Thickness", e.boxThick, 1, 1, 4, "", function(v) e.boxThick = v end)
+    bx:Toggle("Fill", e.fill, function(v) e.fill = v end)
+    bx:Slider("Fill opacity", e.fillAlpha, 0.05, 0.05, 0.6, "", function(v) e.fillAlpha = v end)
+
+    local sk = vtab:Section("Skeleton", "Left")
+    local skT = sk:Toggle("Skeleton", e.skel, function(v) e.skel = v end)
+    skT:AddColorpicker("Skeleton color", e.skelCol, function(c) e.skelCol = c end)
+    sk:Slider("Thickness", e.skelThick, 0.5, 1, 4, "", function(v) e.skelThick = v end)
+    sk:Toggle("Head circle", e.headDot, function(v) e.headDot = v end)
+
+    local lk = vtab:Section("Look direction", "Left", "line out of the head")
+    local lkT = lk:Toggle("Look line", e.look, function(v) e.look = v end)
+    lkT:AddColorpicker("Look color", e.lookCol, function(c) e.lookCol = c end)
+    lk:Slider("Length", e.lookLen, 0.5, 1, 15, "studs", function(v) e.lookLen = v end)
+
+    local ol = vtab:Section("Outline chams", "Right", "wireframe silhouette, no fill")
+    local olT = ol:Toggle("Outline", e.outline, function(v) e.outline = v end)
+    olT:AddColorpicker("Outline color", e.outCol, function(c) e.outCol = c end)
+    ol:Slider("Thickness", e.outThick, 0.5, 1, 4, "", function(v) e.outThick = v end)
+    ol:Slider("Size", e.outScale, 0.05, 0.8, 1.6, "x", function(v) e.outScale = v end)
+    ol:Toggle("Glow (second outline)", e.outGlow, function(v) e.outGlow = v end)
+
+    local xtab = win:Tab("Extras", "eye")
+
+    local lb = xtab:Section("Info", "Left")
+    lb:Toggle("Distance", e.dist, function(v) e.dist = v end)
+    lb:Toggle("Movement flags", e.flags, function(v) e.flags = v end)
+    lb:Toggle("Scale text with distance", e.scaleText, function(v) e.scaleText = v end)
+    lb:Toggle("Fade with distance", e.fade, function(v) e.fade = v end)
+    lb:Slider("Max distance", e.maxDist, 50, 100, 5000, "studs", function(v) e.maxDist = v end)
+    lb:Toggle("Ally health bar", e.allyHp, function(v) e.allyHp = v end)
+    lb:Toggle("Player count", e.hud, function(v) e.hud = v end)
+
+    local cl = xtab:Section("Colors", "Left")
+    cl:Dropdown("Color mode", {"Static"}, {"Static", "Distance", "Rainbow"}, false, function(v)
+        e.colorMode = string.lower(tostring(pick(v)))
+    end)
+    local fcT = cl:Toggle("Highlight closest to crosshair", e.closest, function(v) e.closest = v end)
+    fcT:AddColorpicker("Highlight color", e.focusCol, function(c) e.focusCol = c end)
+
+    local ar = xtab:Section("Off-screen arrows", "Right")
+    local arT = ar:Toggle("Arrows", e.arrows, function(v) e.arrows = v end)
+    arT:AddColorpicker("Arrow color", e.arrowCol, function(c) e.arrowCol = c end)
+    ar:Slider("Size", e.arrowSize, 1, 6, 30, "px", function(v) e.arrowSize = v end)
+    ar:Slider("Radius", e.arrowRad, 1, 30, 95, "%", function(v) e.arrowRad = v end)
+
+    local rd = xtab:Section("Radar", "Right")
+    rd:Toggle("Radar", e.radar, function(v) e.radar = v end)
+    rd:Slider("Size", e.radarSize, 5, 80, 300, "px", function(v) e.radarSize = v end)
+    rd:Slider("Range", e.radarRange, 5, 30, 600, "studs", function(v) e.radarRange = v end)
+    rd:Slider("Position X", e.radarX, 5, 0, 1800, "px", function(v) e.radarX = v end)
+    rd:Slider("Position Y", e.radarY, 5, 0, 1000, "px", function(v) e.radarY = v end)
+    rd:Colorpicker("Enemy dot", e.radarEnemy, function(c) e.radarEnemy = c end)
+    rd:Colorpicker("Ally dot", e.radarAlly, function(c) e.radarAlly = c end)
 
     local seenTab = win:Tab("Last seen", "eye")
 
@@ -594,17 +762,14 @@ local function buildMenu()
     use:Toggle("Aim", cfg.aimWall, function(v) cfg.aimWall = v end)
     use:Toggle("ESP colors", cfg.espVis, function(v)
         cfg.espVis = v
-        wipe(boxSt)
         wipe(triSt)
     end)
     use:Colorpicker("Visible color", cfg.visCol, function(c)
         cfg.visCol = c
-        wipe(boxSt)
         wipe(triSt)
     end)
     use:Colorpicker("Hidden color", cfg.hidCol, function(c)
         cfg.hidCol = c
-        wipe(boxSt)
         wipe(triSt)
     end)
 
@@ -769,6 +934,25 @@ local DEFS = {
         legs = { { "Left Leg" }, { "Right Leg" } },
     },
 }
+local BONES = {
+    R15 = {
+        { "Head", "UpperTorso" }, { "UpperTorso", "LowerTorso" },
+        { "UpperTorso", "LeftUpperArm" }, { "LeftUpperArm", "LeftLowerArm" }, { "LeftLowerArm", "LeftHand" },
+        { "UpperTorso", "RightUpperArm" }, { "RightUpperArm", "RightLowerArm" }, { "RightLowerArm", "RightHand" },
+        { "LowerTorso", "LeftUpperLeg" }, { "LeftUpperLeg", "LeftLowerLeg" }, { "LeftLowerLeg", "LeftFoot" },
+        { "LowerTorso", "RightUpperLeg" }, { "RightUpperLeg", "RightLowerLeg" }, { "RightLowerLeg", "RightFoot" },
+    },
+    R6 = {
+        { "Head", "Torso" }, { "Torso", "Left Arm" }, { "Torso", "Right Arm" },
+        { "Torso", "Left Leg" }, { "Torso", "Right Leg" },
+    },
+}
+
+local SX3 = { 1, 1, 1, 1, -1, -1, -1, -1 }
+local SY3 = { 1, 1, -1, -1, 1, 1, -1, -1 }
+local SZ3 = { 1, -1, 1, -1, 1, -1, 1, -1 }
+local E3 = { { 1, 2 }, { 3, 4 }, { 5, 6 }, { 7, 8 }, { 1, 3 }, { 2, 4 }, { 5, 7 }, { 6, 8 }, { 1, 5 }, { 2, 6 }, { 3, 7 }, { 4, 8 } }
+local PX3, PY3 = {}, {}
 
 local function nearSelf(c)
     local dx, dy, dz = c.px - cX, c.py - cY, c.pz - cZ
@@ -781,10 +965,12 @@ local function skip(c)
 end
 
 local function buildCache(char)
-    local def = char:FindFirstChild("UpperTorso") and DEFS.R15 or DEFS.R6
+    local isR15 = char:FindFirstChild("UpperTorso") ~= nil
+    local def = isR15 and DEFS.R15 or DEFS.R6
     local c = {
-        char = char, groups = {}, all = {}, kinds = {}, complete = true, wait = 0, age = 0,
+        char = char, groups = {}, all = {}, kinds = {}, bones = {}, complete = true, wait = 0, age = 0,
         ally = char:FindFirstChild("NameTag") ~= nil,
+        root = char:FindFirstChild("HumanoidRootPart"),
         hidden = false, px = 0, py = 0, pz = 0,
         cAt = {}, cx = {}, cy = {}, cz = {},
         wt = {}, wv = {},
@@ -806,6 +992,12 @@ local function buildCache(char)
             gl[#gl + 1] = list
         end
         c.groups[key] = gl
+    end
+    for _, pair in ipairs(isR15 and BONES.R15 or BONES.R6) do
+        local a, b = char:FindFirstChild(pair[1]), char:FindFirstChild(pair[2])
+        if a and b and a:IsA("BasePart") and b:IsA("BasePart") then
+            c.bones[#c.bones + 1] = { a, b }
+        end
     end
     return c
 end
@@ -830,7 +1022,7 @@ local function labelText(c)
         local parts = {}
         if cfg.espNum and c.num then parts[#parts + 1] = "Player " .. c.num end
         if cfg.weapon and c.weapon then parts[#parts + 1] = "[" .. c.weapon .. "]" end
-        c.lbl = table.concat(parts, "  ")
+        c.lbl = table.concat(parts, " ")
     end
     return c.lbl
 end
@@ -865,6 +1057,24 @@ local function trackVoid(i, c)
     end
 end
 
+local function motion(c, now)
+    local x, y, z = c.px, c.py, c.pz
+    if not c.mt then
+        c.mt, c.mx, c.my, c.mz, c.spd, c.vy = now, x, y, z, 0, 0
+        return
+    end
+    local dt = now - c.mt
+    if dt < 0.12 then return end
+    local dx, dy, dz = x - c.mx, y - c.my, z - c.mz
+    if dt > 0.5 or dx * dx + dy * dy + dz * dz > 400 then
+        c.spd, c.vy = 0, 0
+    else
+        c.spd = math.sqrt(dx * dx + dz * dz) / dt
+        c.vy = dy / dt
+    end
+    c.mt, c.mx, c.my, c.mz = now, x, y, z
+end
+
 local stamp, frame = {}, 0
 
 local function getCache(i, folder)
@@ -895,6 +1105,7 @@ local function getCache(i, folder)
     end
     if #c.all == 0 then return nil end
     trackVoid(i, c)
+    if cfg.e.flags and not c.hidden then motion(c, tick()) end
     return c
 end
 
@@ -922,6 +1133,25 @@ local function bodyCenter(c)
     local x, y, z = groupCenter(c, "torso")
     if x then return x, y, z end
     return groupCenter(c, "head")
+end
+
+local function bounds(c)
+    if c.bAt == frame then return c.bx0, c.by0, c.bx1, c.by1 end
+    c.bAt = frame
+    local n = 0
+    for _, p in ipairs(c.all) do n = projectPart(p, 1, n) end
+    if n == 0 then
+        c.bx0 = nil
+        return nil
+    end
+    local minX, minY, maxX, maxY = BX[1], BY[1], BX[1], BY[1]
+    for k = 2, n do
+        local x, y = BX[k], BY[k]
+        if x < minX then minX = x elseif x > maxX then maxX = x end
+        if y < minY then minY = y elseif y > maxY then maxY = y end
+    end
+    c.bx0, c.by0, c.bx1, c.by1 = minX, minY, maxX, maxY
+    return minX, minY, maxX, maxY
 end
 
 local function slab(d, f, h, lo, hi)
@@ -1116,6 +1346,36 @@ local function colorFor(st, base)
     return base
 end
 
+local function hsv(h, s, v)
+    local i = math.floor(h * 6)
+    local f = h * 6 - i
+    local p, q, t = v * (1 - s), v * (1 - f * s), v * (1 - (1 - f) * s)
+    i = i % 6
+    local r, g, b
+    if i == 0 then r, g, b = v, t, p
+    elseif i == 1 then r, g, b = q, v, p
+    elseif i == 2 then r, g, b = p, v, t
+    elseif i == 3 then r, g, b = p, q, v
+    elseif i == 4 then r, g, b = t, p, v
+    else r, g, b = v, p, q end
+    return Color3.new(r, g, b)
+end
+
+local function elemColor(c, base, st, dist)
+    local e = cfg.e
+    if e.closest and c.focus then return e.focusCol end
+    if st ~= "b" then return colorFor(st, base) end
+    local m = e.colorMode
+    if m == "distance" then
+        local t = dist / e.maxDist
+        if t > 1 then t = 1 end
+        return Color3.new(1 - t * 0.7, 0.25 + t * 0.75, 0.3)
+    elseif m == "rainbow" then
+        return hsv((tick() * 0.3 + (c.num or 0) * 0.08) % 1, 0.85, 1)
+    end
+    return base
+end
+
 local function record(i, c)
     local x, y, z = bodyCenter(c)
     if not x then return end
@@ -1224,32 +1484,330 @@ local function drawChams(i, c, st)
     return ti > 0
 end
 
-local function drawBox(i, c, st)
-    if cfg.box then
-        local n = 0
-        for _, p in ipairs(c.all) do n = projectPart(p, 1, n) end
-        if n > 0 then
-            local minX, minY, maxX, maxY = BX[1], BY[1], BX[1], BY[1]
-            for k = 2, n do
-                local x, y = BX[k], BY[k]
-                if x < minX then minX = x elseif x > maxX then maxX = x end
-                if y < minY then minY = y elseif y > maxY then maxY = y end
-            end
-            if maxX > 0 and minX < hW * 2 and maxY > 0 and minY < hH * 2 then
-                local box = make(S.boxes, i, "Square", initBox)
-                box.Position = Vector2.new(minX, minY)
-                box.Size = Vector2.new(maxX - minX, maxY - minY)
-                if boxSt[i] ~= st then
-                    box.Color = colorFor(st, cfg.boxCol)
-                    boxSt[i] = st
+local function draw3d(c, p, col, a)
+    local cx, cy, cz = bodyCenter(c)
+    if not cx then return 0 end
+
+    local rx, rz, fx, fz = 1, 0, 0, 1
+    if c.root then
+        local _, _, _, r00, _, r02, _, _, _, r20, _, r22 = c.root.CFrame:GetComponents()
+        rx, rz, fx, fz = r00, r20, r02, r22
+        local rl = math.sqrt(rx * rx + rz * rz)
+        if rl > 1e-3 then rx, rz = rx / rl, rz / rl end
+        local fl = math.sqrt(fx * fx + fz * fz)
+        if fl > 1e-3 then fx, fz = fx / fl, fz / fl end
+    end
+
+    for k = 1, 8 do
+        local sx, sy, sz = SX3[k], SY3[k], SZ3[k]
+        PX3[k], PY3[k] = projectPoint(
+            cx + (rx * sx + fx * sz) * B3W,
+            cy + sy * B3H,
+            cz + (rz * sx + fz * sz) * B3W
+        )
+    end
+
+    local used = 0
+    for k = 1, 12 do
+        local e = E3[k]
+        local ax, ay, bx, by = PX3[e[1]], PY3[e[1]], PX3[e[2]], PY3[e[2]]
+        if ax and bx then
+            used = used + 1
+            seg(p[used], ax, ay, bx, by, col, cfg.e.boxThick, a)
+        end
+    end
+    return used
+end
+
+local function drawBoxes(i, c, x, st, dist, a, onS, x0, y0, x1, y1)
+    local e = cfg.e
+    local style = e.boxStyle
+    local show = cfg.box and onS
+    local col = show and elemColor(c, cfg.boxCol, st, dist)
+    local th = e.boxThick
+    local drawn = false
+
+    if show and style == "full" then
+        local b = make(S.boxes, i, "Square", initBox)
+        b.Position, b.Size = Vector2.new(x0, y0), Vector2.new(x1 - x0, y1 - y0)
+        b.Color, b.Thickness, b.Transparency = col, th, a
+        toggle(boxOn, S.boxes, i, true)
+        drawn = true
+    else
+        toggle(boxOn, S.boxes, i, false)
+    end
+
+    local cp = xpool(x, "corn", 8, show and style == "corners")
+    if cp then
+        local cw, ch = (x1 - x0) * 0.25, (y1 - y0) * 0.18
+        seg(cp[1], x0, y0, x0 + cw, y0, col, th, a)
+        seg(cp[2], x0, y0, x0, y0 + ch, col, th, a)
+        seg(cp[3], x1, y0, x1 - cw, y0, col, th, a)
+        seg(cp[4], x1, y0, x1, y0 + ch, col, th, a)
+        seg(cp[5], x0, y1, x0 + cw, y1, col, th, a)
+        seg(cp[6], x0, y1, x0, y1 - ch, col, th, a)
+        seg(cp[7], x1, y1, x1 - cw, y1, col, th, a)
+        seg(cp[8], x1, y1, x1, y1 - ch, col, th, a)
+        cp.on = 8
+        drawn = true
+    end
+
+    local bp = xpool(x, "b3", 12, cfg.box and style == "3d")
+    if bp then
+        local u = draw3d(c, bp, elemColor(c, cfg.boxCol, st, dist), a)
+        lend(bp, u)
+        if u > 0 then drawn = true end
+    end
+
+    if show and e.fill and (style == "full" or style == "corners") then
+        local f = single(x, "fill", "Square", initFill)
+        f.Position, f.Size = Vector2.new(x0, y0), Vector2.new(x1 - x0, y1 - y0)
+        f.Color, f.Transparency = col, e.fillAlpha * a
+        sv(x, "fill", true)
+        drawn = true
+    else
+        sv(x, "fill", false)
+    end
+    return drawn
+end
+
+local function drawSkel(c, p, col, a)
+    local used = 0
+    local th = cfg.e.skelThick
+    for k = 1, #c.bones do
+        local pr = c.bones[k]
+        local pa, pb = pr[1].Position, pr[2].Position
+        local ax, ay = projectPoint(pa.X, pa.Y, pa.Z)
+        local bx, by = projectPoint(pb.X, pb.Y, pb.Z)
+        if ax and bx then
+            used = used + 1
+            seg(p[used], ax, ay, bx, by, col, th, a)
+        end
+    end
+    return used
+end
+
+local function drawHeadDot(x, c, col, a)
+    local hl = c.groups.head[1]
+    local hp = hl and hl[1]
+    if hp then
+        local pos = hp.Position
+        local sx, sy = projectPoint(pos.X, pos.Y, pos.Z)
+        if sx then
+            local d = -(c02 * (pos.X - cX) + c12 * (pos.Y - cY) + c22 * (pos.Z - cZ))
+            local ci = single(x, "head", "Circle", initHead)
+            ci.Position = Vector2.new(sx, sy)
+            ci.Radius = math.max(2, hp.Size.Y * 0.55 * fL / d)
+            ci.Color, ci.Transparency, ci.Thickness = col, a, cfg.e.skelThick
+            sv(x, "head", true)
+            return true
+        end
+    end
+    sv(x, "head", false)
+    return false
+end
+
+local function hullLines(p, used, c, scale, col, th, a)
+    for _, key in ipairs(KEYS) do
+        if cfg[key] then
+            for _, list in ipairs(c.groups[key]) do
+                local n = 0
+                for _, part in ipairs(list) do n = projectPart(part, scale, n) end
+                local hn = n >= 3 and buildHull(n) or 0
+                if hn >= 3 then
+                    for k = 1, hn do
+                        if used >= p.n then return used end
+                        local nx = k % hn + 1
+                        used = used + 1
+                        seg(p[used], H[k][1], H[k][2], H[nx][1], H[nx][2], col, th, a)
+                    end
                 end
-                toggle(boxOn, S.boxes, i, true)
-                return true
             end
         end
     end
-    toggle(boxOn, S.boxes, i, false)
+    return used
+end
+
+local function drawLook(x, c, col, a)
+    local hl = c.groups.head[1]
+    local hp = hl and hl[1]
+    if hp then
+        local hx, hy, hz, _, _, a02, _, _, a12, _, _, a22 = hp.CFrame:GetComponents()
+        local len = cfg.e.lookLen
+        local sx, sy = projectPoint(hx, hy, hz)
+        local ex, ey = projectPoint(hx - a02 * len, hy - a12 * len, hz - a22 * len)
+        if sx and ex then
+            local l = single(x, "look", "Line", initLine)
+            seg(l, sx, sy, ex, ey, col, cfg.e.skelThick, a)
+            sv(x, "look", true)
+            return true
+        end
+    end
+    sv(x, "look", false)
     return false
+end
+
+local function bodyHeight(c)
+    local hl = c.groups.head[1]
+    local hp = hl and hl[1]
+    if not hp then return nil end
+    local minY
+    for _, list in ipairs(c.groups.legs) do
+        for _, p in ipairs(list) do
+            local y = p.Position.Y
+            if not minY or y < minY then minY = y end
+        end
+    end
+    if not minY then return nil end
+    return hp.Position.Y - minY
+end
+
+local function flagText(c)
+    local spd, vy = c.spd or 0, c.vy or 0
+    local s
+    if vy > 6 or vy < -14 then s = "AIR"
+    elseif spd < 0.7 then s = "STILL"
+    elseif spd <= WALK_MAX then s = "WALK"
+    else s = "RUN" end
+    local h = bodyHeight(c)
+    if h and h < DUCK_H then s = s .. " DUCK" end
+    return s
+end
+
+local WHITE = Color3.fromRGB(235, 235, 235)
+
+local function drawInfo(x, c, dist, x0, x1, y1, a)
+    local e = cfg.e
+    local s
+    if e.dist then s = math.floor(dist) .. " studs" end
+    if e.flags then
+        local f = flagText(c)
+        s = s and (s .. "  " .. f) or f
+    end
+    if not s then
+        sv(x, "info", false)
+        return false
+    end
+    local t = single(x, "info", "Text", initInfo)
+    if x.itxt ~= s then
+        x.itxt = s
+        t.Text = s
+    end
+    t.Size = e.scaleText and math.max(10, math.min(14, 15 - dist / 200)) or 13
+    t.Color, t.Transparency = WHITE, a
+    t.Position = Vector2.new((x0 + x1) * 0.5, y1 + 3)
+    sv(x, "info", true)
+    return true
+end
+
+local function allyHealth(c)
+    if c.hpAt and frame - c.hpAt < 10 then return c.hp end
+    c.hpAt = frame
+    local ok, v = pcall(function()
+        local nt = c.char:FindFirstChild("NameTag")
+        local cg = nt and nt:FindFirstChild("CanvasGroup")
+        local hl = cg and cg:FindFirstChild("Health")
+        local t = hl and hl.Text
+        return t and tonumber(string.match(t, "%d+"))
+    end)
+    c.hp = ok and v or nil
+    return c.hp
+end
+
+local function drawArrow(x, c, col, a, dist)
+    local bx, by, bz = bodyCenter(c)
+    if not bx then return false end
+
+    local ex, ey, ez = bx - cX, by - cY, bz - cZ
+    local ax = c00 * ex + c10 * ey + c20 * ez
+    local ay = c01 * ex + c11 * ey + c21 * ez
+    local len = math.sqrt(ax * ax + ay * ay)
+    if len < 0.001 then ax, ay, len = 0, 1, 1 end
+
+    local ux, uy = ax / len, -ay / len
+    local rad = math.min(hW, hH) * cfg.e.arrowRad / 100
+    local px, py = hW + ux * rad, hH + uy * rad
+    local sz = cfg.e.arrowSize
+
+    local tri = single(x, "arr", "Triangle", initArrow)
+    tri.PointA = Vector2.new(px, py)
+    tri.PointB = Vector2.new(px - ux * sz - uy * sz * 0.5, py - uy * sz + ux * sz * 0.5)
+    tri.PointC = Vector2.new(px - ux * sz + uy * sz * 0.5, py - uy * sz - ux * sz * 0.5)
+    tri.Color, tri.Transparency = col, a
+    sv(x, "arr", true)
+
+    if cfg.e.dist then
+        local t = single(x, "arrT", "Text", initInfo)
+        t.Text = tostring(math.floor(dist))
+        t.Position = Vector2.new(px - ux * (sz + 14), py - uy * (sz + 14))
+        t.Color, t.Transparency = col, a
+        sv(x, "arrT", true)
+    else
+        sv(x, "arrT", false)
+    end
+    return true
+end
+
+local function drawExtras(c, x, st, dist, a, onS, x0, y0, x1, y1)
+    local e = cfg.e
+    local any = false
+
+    local sp = xpool(x, "skel", #c.bones, e.skel and onS)
+    if sp then
+        local u = drawSkel(c, sp, elemColor(c, e.skelCol, st, dist), a)
+        lend(sp, u)
+        if u > 0 then any = true end
+    end
+
+    if e.skel and e.headDot and onS then
+        if drawHeadDot(x, c, elemColor(c, e.skelCol, st, dist), a) then any = true end
+    else
+        sv(x, "head", false)
+    end
+
+    local op = xpool(x, "out", e.outGlow and 190 or 95, e.outline and onS)
+    if op then
+        local col = elemColor(c, e.outCol, st, dist)
+        local u = hullLines(op, 0, c, e.outScale, col, e.outThick, a)
+        if e.outGlow then u = hullLines(op, u, c, e.outScale + 0.15, col, e.outThick, a * 0.35) end
+        lend(op, u)
+        if u > 0 then any = true end
+    end
+
+    if e.look and onS then
+        if drawLook(x, c, elemColor(c, e.lookCol, st, dist), a) then any = true end
+    else
+        sv(x, "look", false)
+    end
+
+    if onS and (e.dist or e.flags) then
+        if drawInfo(x, c, dist, x0, x1, y1, a) then any = true end
+    else
+        sv(x, "info", false)
+    end
+
+    local hp = xpool(x, "hp", 2, e.allyHp and c.ally and onS)
+    if hp then
+        local v = allyHealth(c)
+        if v then
+            local frac = math.max(0, math.min(1, v / 100))
+            local bx = x0 - 5
+            seg(hp[1], bx, y1, bx, y0, Color3.fromRGB(0, 0, 0), 4, a)
+            seg(hp[2], bx, y1, bx, y1 - (y1 - y0) * frac, Color3.new(1 - frac, frac, 0.2), 2, a)
+            hp.on = 2
+            any = true
+        else
+            lend(hp, 0)
+        end
+    end
+
+    if e.arrows and not onS then
+        if drawArrow(x, c, elemColor(c, e.arrowCol, st, dist), a, dist) then any = true end
+    else
+        sv(x, "arr", false)
+        sv(x, "arrT", false)
+    end
+    return any
 end
 
 local function drawLabel(i, c)
@@ -1303,6 +1861,14 @@ local function procChar(i, folder)
         return hideGhost(i)
     end
 
+    local e = cfg.e
+    local dx, dy, dz = c.px - cX, c.py - cY, c.pz - cZ
+    local dist = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if dist > e.maxDist then
+        hideSlot(i)
+        return hideGhost(i)
+    end
+
     if (cfg.weapon or cfg.seen) and (c.infoAt == nil or (frame + i) % 25 == 0) then
         refreshInfo(c)
         c.infoAt = frame
@@ -1311,18 +1877,110 @@ local function procChar(i, folder)
     hideGhost(i)
 
     if cfg.espVis then
-        local x, y, z = bodyCenter(c)
-        if x then c.shown = exposed(c, "body", x, y, z, folder, tick()) end
+        local bx, by, bz = bodyCenter(c)
+        if bx then c.shown = exposed(c, "body", bx, by, bz, folder, tick()) end
     else
         c.shown = nil
     end
     local st = stateOf(c)
+    local a = e.fade and math.max(0.25, 1 - dist / e.maxDist) or 1
 
-    local a = drawChams(i, c, st)
-    local b = drawBox(i, c, st)
-    local l = drawLabel(i, c)
-    local t = drawTracer(i, c)
-    vis[i] = a or b or l or t
+    local x = xget(i)
+    local x0, y0, x1, y1 = bounds(c)
+    local onS = x0 ~= nil and x1 > 0 and x0 < hW * 2 and y1 > 0 and y0 < hH * 2
+
+    local r1 = drawChams(i, c, st)
+    local r2 = drawBoxes(i, c, x, st, dist, a, onS, x0, y0, x1, y1)
+    local r3 = drawLabel(i, c)
+    local r4 = drawTracer(i, c)
+    local r5 = drawExtras(c, x, st, dist, a, onS, x0, y0, x1, y1)
+    vis[i] = r1 or r2 or r3 or r4 or r5
+end
+
+local function drawRadar(folder, on)
+    local e = cfg.e
+    local R = S.radar
+    if not (on and e.radar) then
+        if R and R.shown then
+            R.shown = false
+            R.bg.Visible, R.border.Visible, R.me.Visible = false, false, false
+            for k = 1, R.used do R.dots[k].Visible = false end
+            R.used = 0
+        end
+        return
+    end
+
+    if not R then
+        R = { dots = {}, used = 0 }
+        R.bg = Drawing.new("Square")
+        R.bg.Filled, R.bg.Color, R.bg.Transparency = true, Color3.fromRGB(10, 14, 22), 0.6
+        R.border = Drawing.new("Square")
+        R.border.Filled, R.border.Thickness, R.border.Color, R.border.Transparency = false, 1, Color3.fromRGB(200, 200, 200), 1
+        R.me = Drawing.new("Triangle")
+        R.me.Filled, R.me.Color, R.me.Transparency = true, Color3.fromRGB(255, 255, 255), 1
+        S.radar = R
+    end
+    R.shown = true
+
+    local size = e.radarSize
+    local px0, py0 = e.radarX, e.radarY
+    local cx, cy = px0 + size * 0.5, py0 + size * 0.5
+    local half = size * 0.5 - 4
+
+    R.bg.Position, R.bg.Size = Vector2.new(px0, py0), Vector2.new(size, size)
+    R.border.Position, R.border.Size = Vector2.new(px0, py0), Vector2.new(size, size)
+    R.me.PointA = Vector2.new(cx, cy - 5)
+    R.me.PointB = Vector2.new(cx - 4, cy + 4)
+    R.me.PointC = Vector2.new(cx + 4, cy + 4)
+    R.bg.Visible, R.border.Visible, R.me.Visible = true, true, true
+
+    local rx, rz = c00, c20
+    local fx, fz = -c02, -c22
+    local rl = math.sqrt(rx * rx + rz * rz)
+    local fl = math.sqrt(fx * fx + fz * fz)
+    if rl < 0.01 or fl < 0.01 then return end
+    rx, rz, fx, fz = rx / rl, rz / rl, fx / fl, fz / fl
+
+    local used = 0
+    for i = 1, MAX do
+        local c = getCache(i, folder)
+        if c and not c.hidden and not nearSelf(c) and not (cfg.teamCheck and c.ally) then
+            local ex, ez = c.px - cX, c.pz - cZ
+            local dx = (ex * rx + ez * rz) / e.radarRange * half
+            local dy = -(ex * fx + ez * fz) / e.radarRange * half
+            local m = math.sqrt(dx * dx + dy * dy)
+            if m > half then dx, dy = dx / m * half, dy / m * half end
+
+            used = used + 1
+            local d = R.dots[used]
+            if not d then
+                d = Drawing.new("Circle")
+                d.Filled, d.NumSides, d.Radius, d.Transparency = true, 10, 3, 1
+                R.dots[used] = d
+            end
+            d.Position = Vector2.new(cx + dx, cy + dy)
+            d.Color = c.ally and e.radarAlly or e.radarEnemy
+            d.Visible = true
+        end
+    end
+    for k = used + 1, R.used do R.dots[k].Visible = false end
+    R.used = used
+end
+
+local function drawHud(on, enemies, allies)
+    local t = S.hudTxt
+    if on and cfg.e.hud then
+        if not t then
+            t = Drawing.new("Text")
+            t.Size, t.Center, t.Outline, t.Font, t.Color, t.Transparency = 15, true, true, 2, Color3.fromRGB(255, 255, 255), 1
+            S.hudTxt = t
+        end
+        t.Text = "Enemies " .. enemies .. "   Allies " .. allies
+        t.Position = Vector2.new(hW, 18)
+        t.Visible = true
+    elseif t and t.Visible then
+        t.Visible = false
+    end
 end
 
 local remX, remY = 0, 0
@@ -1487,7 +2145,7 @@ local function drawHitboxes(c, on)
                     sq.Filled, sq.Thickness, sq.Transparency = false, 1, 1
                     pool[n] = sq
                 end
-                sq.Color = on and cfg.visCol or Color3.fromRGB(0, 255, 255)
+                sq.Color = on and Color3.fromRGB(80, 255, 120) or Color3.fromRGB(0, 255, 255)
                 sq.Position = Vector2.new(minX, minY)
                 sq.Size = Vector2.new(maxX - minX, maxY - minY)
                 sq.Visible = true
@@ -1613,36 +2271,72 @@ end
 local step, acc = 1 / FPS, 0
 local errShown = false
 
+local function espOn()
+    local e = cfg.e
+    return cfg.box or cfg.chams or cfg.weapon or cfg.espNum or cfg.tracer or cfg.seen
+        or e.skel or e.outline or e.look or e.arrows or e.dist or e.flags
+end
+
+local function markFocus(folder)
+    local best, bestD
+    for i = 1, MAX do
+        local c = getCache(i, folder)
+        if c then
+            c.focus = false
+            if not c.hidden and not skip(c) then
+                local bx, by, bz = bodyCenter(c)
+                local sx, sy
+                if bx then sx, sy = projectPoint(bx, by, bz) end
+                if sx then
+                    local dx, dy = sx - hW, sy - hH
+                    local d = dx * dx + dy * dy
+                    if not bestD or d < bestD then best, bestD = c, d end
+                end
+            end
+        end
+    end
+    if best then best.focus = true end
+end
+
 local function drawAll(folder)
-    local esp = cfg.box or cfg.chams or cfg.weapon or cfg.espNum or cfg.tracer or cfg.seen
-    if not (cfg.on and esp) then return hideAll() end
-
+    local on = cfg.on
     local enemies, allies = 0, 0
-    for i = 1, MAX do
-        local ok, c = pcall(getCache, i, folder)
-        if ok and c and not nearSelf(c) then
-            if c.ally then
-                allies = allies + 1
-                c.num = allies
-            else
-                enemies = enemies + 1
-                c.num = enemies
+
+    if on then
+        for i = 1, MAX do
+            local ok, c = pcall(getCache, i, folder)
+            if ok and c and not nearSelf(c) then
+                if c.ally then
+                    allies = allies + 1
+                    c.num = allies
+                else
+                    enemies = enemies + 1
+                    c.num = enemies
+                end
             end
         end
+        if cfg.e.closest then pcall(markFocus, folder) end
     end
 
-    for i = 1, MAX do
-        local ok, e = pcall(procChar, i, folder)
-        if not ok then
-            S.cache[i] = nil
-            hideSlot(i)
-            hideGhost(i)
-            if not errShown then
-                errShown = true
-                print("[CharESP] slot " .. i .. " error: " .. tostring(e))
+    if on and espOn() then
+        for i = 1, MAX do
+            local ok, err = pcall(procChar, i, folder)
+            if not ok then
+                S.cache[i] = nil
+                hideSlot(i)
+                hideGhost(i)
+                if not errShown then
+                    errShown = true
+                    print("[Kontra] slot " .. i .. " error: " .. tostring(err))
+                end
             end
         end
+    else
+        hideAll()
     end
+
+    pcall(drawRadar, folder, on)
+    pcall(drawHud, on, enemies, allies)
 end
 
 S.conn = RunService.RenderStepped:Connect(function(dt)
@@ -1658,6 +2352,8 @@ S.conn = RunService.RenderStepped:Connect(function(dt)
         hideFov()
         drawHitboxes(nil)
         trigIdle(tick())
+        pcall(drawRadar, nil, false)
+        pcall(drawHud, false, 0, 0)
         S.lock = nil
         return
     end
@@ -1671,7 +2367,7 @@ S.conn = RunService.RenderStepped:Connect(function(dt)
         if cfg.weapon and wCount == 0 then
             if frame % 180 == 0 then pcall(buildWeaponMap) end
             if frame == 600 and wCount == 0 then
-                print("[CharESP] weapon list is empty, labels cannot be matched")
+                print("[Kontra] weapon list is empty, labels cannot be matched")
             end
         end
         drawAll(folder)
@@ -1682,23 +2378,11 @@ S.conn = RunService.RenderStepped:Connect(function(dt)
     pcall(trigStep, folder)
 end)
 
-print("[CharESP] running")
-
-_G.SoundESP = {
-    Config = cfg.snd,
-    Log = function()
-        local parts = {}
-        for name, cnt in pairs(S.snd.lastCounts) do parts[#parts + 1] = name .. ":" .. cnt end
-        local live = 0
-        for i = 1, SNDMAX do if S.snd.marks[i] then live = live + 1 end end
-        print("emitted:", S.snd.emitCount, "| marks live:", live, "| events: " .. table.concat(parts, " | "))
-    end,
-    Stop = stopSounds,
-}
+print("[Kontra] running")
 
 S.cleanup = function()
-    stopSounds()
     if S.conn then pcall(function() S.conn:Disconnect() end) end
+    stopSounds()
     if tb.down and mouse1release then pcall(mouse1release) end
     for _, b in pairs(S.boxes) do pcall(function() b:Remove() end) end
     for _, d in pairs(S.lbl) do pcall(function() d:Remove() end) end
@@ -1709,14 +2393,34 @@ S.cleanup = function()
     for _, pool in pairs(S.tris) do
         for _, t in pairs(pool) do pcall(function() t:Remove() end) end
     end
+    for _, x in pairs(X) do
+        for _, name in ipairs(POOLS) do
+            local p = x[name]
+            if p then
+                for k = 1, p.n do pcall(function() p[k]:Remove() end) end
+            end
+        end
+        for _, name in ipairs(ONES) do
+            local d = x[name]
+            if d then pcall(function() d:Remove() end) end
+        end
+    end
+    local R = S.radar
+    if R then
+        pcall(function() R.bg:Remove() end)
+        pcall(function() R.border:Remove() end)
+        pcall(function() R.me:Remove() end)
+        for _, d in pairs(R.dots) do pcall(function() d:Remove() end) end
+    end
+    if S.hudTxt then pcall(function() S.hudTxt:Remove() end) end
+    for i = 1, SNDMAX do
+        pcall(function() S.snd.dot[i]:Remove() end)
+        pcall(function() S.snd.txt[i]:Remove() end)
+        pcall(function() S.snd.line[i]:Remove() end)
+    end
     if S.tbSq then
         for _, q in pairs(S.tbSq) do pcall(function() q:Remove() end) end
     end
     if S.fov then pcall(function() S.fov:Remove() end) end
-    if S.snd then
-        for _, d in ipairs(S.snd.dot) do pcall(function() d:Remove() end) end
-        for _, d in ipairs(S.snd.txt) do pcall(function() d:Remove() end) end
-        for _, d in ipairs(S.snd.line) do pcall(function() d:Remove() end) end
-    end
     if S.win then pcall(function() S.win:Destroy() end) end
 end

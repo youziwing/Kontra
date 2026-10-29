@@ -70,7 +70,7 @@ local cfg = {
         tracers = false,
         maxPerNamePerTick = 8,
         life = { step = 3.5, land = 2.5, fire = 1.6, relo = 1.4, impact = 1.4, misc = 1.6 },
-        categories = { step = true, fire = true, relo = false, impact = true, misc = true },
+         categories = { step = true, fire = true, relo = false, impact = false, misc = true },
         cols = {
             enemy = Color3.fromRGB(255, 70, 60),
             ally = Color3.fromRGB(90, 170, 255),
@@ -123,37 +123,50 @@ task.spawn(function()
     while S.snd.running do
         if cfg.snd.on then
             local deb = workspace:FindFirstChild("Debris")
-            local sounds = deb and deb:FindFirstChild("Sounds")
+            -- Current sound system: positional event Parts live in SourceSounds.
+            -- Keep the old Sounds path as a fallback for older servers.
+            local sounds = deb and (deb:FindFirstChild("SourceSounds") or deb:FindFirstChild("Sounds"))
             if sounds then
                 local lp = Players.LocalPlayer
                 local myTeam = lp and lp:GetAttribute("Team") or nil
                 local parts = sounds:GetChildren()
-                local cur = {}
+                -- Build counts and positions in one pass.  The old code
+                -- rescanned every emitter once per name (quadratic on the
+                -- SourceSounds tree), which caused the new system to lag.
+                local cur, grouped = {}, {}
                 for i = 1, #parts do
-                    local nm = parts[i].Name
-                    cur[nm] = (cur[nm] or 0) + 1
+                    local p = parts[i]
+                    local name, pos = p.Name, p.Position
+                    if pos then
+                        cur[name] = (cur[name] or 0) + 1
+                        local g = grouped[name]
+                        if not g then
+                            g = { positions = {}, seen = {} }
+                            grouped[name] = g
+                        end
+                        local key = string.format("%d|%.0f|%.0f|%.0f", math.floor(pos.Y * 4), pos.X, pos.Y, pos.Z)
+                        if not g.seen[key] then
+                            g.seen[key] = true
+                            g.positions[#g.positions + 1] = { pos = pos, key = key }
+                        end
+                    end
                 end
+                local now = tick()
                 for name, cnt in pairs(cur) do
                     local kind = kindOf(name)
                     if kind and cfg.snd.categories[kind] then
-                        local prev = S.snd.lastCounts[name] or 0
                         local rec = S.snd.recent[name] or {}
-                        local now = tick()
-                        local freshPos, seenPos = {}, {}
-                        for i = #parts, 1, -1 do
-                            local p = parts[i]
-                            if p.Name == name then
-                                local pos = p.Position
-                                if pos then
-                                    local key = string.format("%d|%.0f|%.0f|%.0f", math.floor(pos.Y * 4), pos.X, pos.Y, pos.Z)
-                                    if not seenPos[key] and not rec[key] then
-                                        seenPos[key] = true
-                                        freshPos[#freshPos + 1] = { pos = pos, key = key }
-                                    end
-                                end
+                        local freshPos = {}
+                        for i = 1, #grouped[name].positions do
+                            local c = grouped[name].positions[i]
+                            if not rec[c.key] then
+                                freshPos[#freshPos + 1] = c
                             end
                         end
-                        local wanted = math.min(cnt - prev, cfg.snd.maxPerNamePerTick)
+                        -- SourceSounds reuses emitter Parts, so the object
+                        -- count often stays constant. Detect movement/new
+                        -- positions instead of relying on count deltas.
+                        local wanted = math.min(#freshPos, cfg.snd.maxPerNamePerTick)
                         if wanted > 0 then
                             local team = teamOfSound(name)
                             if cfg.snd.teamOnly and team and myTeam and team == myTeam then

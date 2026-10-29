@@ -55,7 +55,7 @@ local cfg = {
         look = false, lookCol = Color3.fromRGB(255, 230, 80), lookLen = 5,
         arrows = true, arrowCol = Color3.fromRGB(255, 80, 80), arrowSize = 14, arrowRad = 75,
         dist = true, flags = true, scaleText = true, fade = false, maxDist = 2000,
-        allyHp = true, colorMode = "static",
+        allyHp = false, colorMode = "static",
         closest = true, focusCol = Color3.fromRGB(255, 220, 0),
         radar = false, radarSize = 140, radarRange = 120, radarX = 20, radarY = 150,
         radarEnemy = Color3.fromRGB(255, 70, 60), radarAlly = Color3.fromRGB(90, 170, 255),
@@ -592,6 +592,7 @@ local function buildMenu()
     parts:Toggle("Arms", cfg.arms, function(v) cfg.arms = v end)
     parts:Toggle("Legs", cfg.legs, function(v) cfg.legs = v end)
 
+    -- Dedicated visual styling tab keeps the main ESP tab readable.
     local vtab = win:Tab("Visuals", "eye")
 
     local bx = vtab:Section("Box", "Left", "needs Box on in the ESP tab")
@@ -602,7 +603,7 @@ local function buildMenu()
     bx:Toggle("Fill", e.fill, function(v) e.fill = v end)
     bx:Slider("Fill opacity", e.fillAlpha, 0.05, 0.05, 0.6, "", function(v) e.fillAlpha = v end)
 
-    local sk = vtab:Section("Skeleton", "Left")
+    local sk = vtab:Section("Skeleton", "Right")
     local skT = sk:Toggle("Skeleton", e.skel, function(v) e.skel = v end)
     skT:AddColorpicker("Skeleton color", e.skelCol, function(c) e.skelCol = c end)
     sk:Slider("Thickness", e.skelThick, 0.5, 1, 4, "", function(v) e.skelThick = v end)
@@ -628,15 +629,6 @@ local function buildMenu()
     lb:Toggle("Scale text with distance", e.scaleText, function(v) e.scaleText = v end)
     lb:Toggle("Fade with distance", e.fade, function(v) e.fade = v end)
     lb:Slider("Max distance", e.maxDist, 50, 100, 5000, "studs", function(v) e.maxDist = v end)
-    lb:Toggle("Ally health bar", e.allyHp, function(v) e.allyHp = v end)
-    lb:Toggle("Player count", e.hud, function(v) e.hud = v end)
-
-    local cl = xtab:Section("Colors", "Left")
-    cl:Dropdown("Color mode", {"Static"}, {"Static", "Distance", "Rainbow"}, false, function(v)
-        e.colorMode = string.lower(tostring(pick(v)))
-    end)
-    local fcT = cl:Toggle("Highlight closest to crosshair", e.closest, function(v) e.closest = v end)
-    fcT:AddColorpicker("Highlight color", e.focusCol, function(c) e.focusCol = c end)
 
     local ar = xtab:Section("Off-screen arrows", "Right")
     local arT = ar:Toggle("Arrows", e.arrows, function(v) e.arrows = v end)
@@ -653,13 +645,13 @@ local function buildMenu()
     rd:Colorpicker("Enemy dot", e.radarEnemy, function(c) e.radarEnemy = c end)
     rd:Colorpicker("Ally dot", e.radarAlly, function(c) e.radarAlly = c end)
 
-    local seenTab = win:Tab("Last seen", "eye")
+    local seenTab = xtab
 
     local ls = seenTab:Section("Last seen", "Left", "where they were before the server hid them")
     ls:Toggle("Enabled", cfg.seen, function(v) cfg.seen = v end)
     ls:Slider("Show for", cfg.seenMax, 1, 1, 30, "s", function(v) cfg.seenMax = v end)
 
-    local sh = seenTab:Section("Show", "Right")
+    local sh = seenTab:Section("Show", "Left")
     local dotT = sh:Toggle("Dot", cfg.sDot, function(v) cfg.sDot = v end)
     dotT:AddColorpicker("Dot color", cfg.sDotCol, function(c)
         cfg.sDotCol = c
@@ -680,7 +672,7 @@ local function buildMenu()
 
     local sndTab = win:Tab("Sounds", "sound")
 
-    local sndMain = sndTab:Section("Sound ESP", "Left", "positional emitters in Debris.Sounds")
+    local sndMain = sndTab:Section("Sound ESP", "Left", "positional emitters in Debris.SourceSounds")
     local sndT = sndMain:Toggle("Enabled", cfg.snd.on, function(v)
         cfg.snd.on = v
         Lib:Notify("Sound ESP", v and "enabled" or "disabled", 2, v and "success" or "warning")
@@ -697,13 +689,11 @@ local function buildMenu()
     sndCat:Toggle("Footsteps", cfg.snd.categories.step, function(v) cfg.snd.categories.step = v end)
     sndCat:Toggle("Gunfire", cfg.snd.categories.fire, function(v) cfg.snd.categories.fire = v end)
     sndCat:Toggle("Reloads", cfg.snd.categories.relo, function(v) cfg.snd.categories.relo = v end)
-    sndCat:Toggle("Impacts", cfg.snd.categories.impact, function(v) cfg.snd.categories.impact = v end)
     sndCat:Toggle("Misc", cfg.snd.categories.misc, function(v) cfg.snd.categories.misc = v end)
 
     local sndLife = sndTab:Section("Marker life", "Left", "seconds until fade")
     sndLife:Slider("Footstep", cfg.snd.life.step, 0.5, 0.5, 10, "s", function(v) cfg.snd.life.step = v end)
     sndLife:Slider("Gunfire", cfg.snd.life.fire, 0.5, 0.5, 10, "s", function(v) cfg.snd.life.fire = v end)
-    sndLife:Slider("Impact", cfg.snd.life.impact, 0.5, 0.5, 10, "s", function(v) cfg.snd.life.impact = v end)
     sndLife:Slider("Misc", cfg.snd.life.misc, 0.5, 0.5, 10, "s", function(v) cfg.snd.life.misc = v end)
 
     local sndColT = sndTab:Section("Colors", "Right", "applied live to the pool")
